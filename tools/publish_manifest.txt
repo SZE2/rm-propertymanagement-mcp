@@ -48,3 +48,6 @@ tests/test_unit_v10.py
 tools/make_issue.py
 tools/make_public_tree.py
 tools/publish_manifest.txt
+CHANGELOG.md
+AGENTS.md
+docs/MAINTAINING.md
