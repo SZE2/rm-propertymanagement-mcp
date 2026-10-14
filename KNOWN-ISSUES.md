@@ -5,6 +5,8 @@ To report a problem, ask your Claude to file a GitHub issue (it shows you the te
 
 ## Privacy and storage (fix planned)
 - **Results are saved to disk by default.** Each query, report or recipe writes its full result (JSON and CSV) to the `out/` folder on your computer. It never leaves your computer and is not uploaded, but it holds real tenant and financial data and is never cleaned automatically. Delete old files yourself. Planned change: store nothing by default and save only when you ask.
+- **Downloaded files and attachments (`download_file`, `find_attachments`).** Attachments (lease PDFs and others) contain tenant data. PDFs and other binary files are saved to `out/files/` on your computer for you to open; text files are returned as text and not saved. Downloaded files in `out/files/` and old result/PDF files in `out/` that this program created are deleted after 14 days (`RM_OUT_KEEP_DAYS`, `0` = never delete; checked at start and once a day). Nothing else is ever deleted. The signed download link (`mode='link'`) works for anyone who has it: treat it like a password.
+- Scanned PDFs have no text layer: the text extraction says so and a person has to read them. Text extraction needs `pdfplumber` or `pypdf` installed (optional).
 - **The call log is on by default** (`local/mcp_calls.jsonl`, tool arguments only, can include names). It stays on your computer. Turn it off with `RM_MCP_LOG=off`. Planned change: off by default.
 - PII masking (`RM_MASK_PII=1`) hides phone, email and SSN-type fields only. It does not hide names or PDFs.
 
@@ -19,7 +21,7 @@ To report a problem, ask your Claude to file a GitHub issue (it shows you the te
 - "Rent" means the recurring charges on the lease, including subsidy charge types. The rent classifier uses name patterns plus an editable file (`local/charge_types.json`); check it matches how your company names charge types.
 - Rent is shown as of today. A holdover charge after a rent charge ends is shown as that charge, not the rent at move-out.
 - Detecting stale charges of tenants who moved out checks up to 25 tenants per run, then skips with a note.
-- The scope label can say "All properties" on some unit-level filters even though the data is filtered correctly.
+- Attachment search: lease PDFs can be in tenant history notes, in lease-renewal attachments (often on an EARLIER renewal) or in custom fields; check each source. Owner and service-issue history had no files in the test data, so those routes are unproven. Only one Rent Manager location has been tested live (the `location` argument is covered by offline tests).
 - The delinquency report's own "Percent Delinquent" is misleading when prospects are included. Dollar amounts are not affected.
 - Profit and loss uses cash basis by default; accrual is selectable.
 
@@ -29,7 +31,7 @@ To report a problem, ask your Claude to file a GitHub issue (it shows you the te
 - Counting very large tables without a filter can take 15 or more seconds.
 
 ## Not built yet
-- Lease audit and blended rent roll workflows.
+- Lease audit and blended rent roll workflows (the pieces exist: recurring charges with `summary='rent'`, `find_attachments`, `download_file`).
 - Remote access from cloud chats, the mobile app's normal chat, and claude.ai (needs a hosted server).
-- Automatic cleanup of saved files; the free-form Rent Manager Help text is not included.
+- The free-form Rent Manager Help text is not included.
 - Haiku end-to-end evals of the four persona question sets have not been run.

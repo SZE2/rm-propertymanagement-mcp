@@ -69,7 +69,7 @@ Read `local/aliases.json` (the property list; it holds business names, so do not
 If an answer is empty (HTTP 204), the API user lacks a privilege or access to that property: go back to Step 4 and fix it in Rent Manager. If a tool does not appear, the app was not fully restarted or the config is invalid JSON.
 
 ### Step 7. Tell the user
-- What it can do: financials (P&L, trial balance, GL), vacancy, delinquency, tenant history, rent roll, PDFs, and free questions on the whole API.
+- What it can do: financials (P&L, trial balance, GL), vacancy, delinquency, tenant history, rent roll, PDFs, lease and other file attachments (`find_attachments`, `download_file`), several locations (`locations`, `location=`), and free questions on the whole API.
 - Where it works: Claude Desktop chat, Cowork (including Cowork started from the mobile app while the computer is on), and Claude Code. It does not work in normal cloud/mobile chats or claude.ai. Details: `docs/WHERE-IT-WORKS.md`.
 - How to report a problem (below).
 

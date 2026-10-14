@@ -66,6 +66,10 @@ Every answer states its **Scope** (one property or all). Long results: Claude gi
 ## PDF reports
 `report_pdf(report, properties, parameters)` saves the built-in report as a PDF in `out/`, one file per property (all properties = one portfolio PDF), in parallel. Try: "PDF rent roll for Oak Court, Elm Park and Birch Lane". Read-only; if a report cannot render a PDF the reply says so and `run_report` gives the data instead.
 
+## Files, locations
+- `find_attachments(source, ids, ...)` lists files stored in Rent Manager (lease and lease-renewal PDFs, tenant/unit/owner/vendor/service-issue history files, property files, custom-field attachments), one row per file with a `file_ref`; `download_file(file_ref, mode)` gets one (text-like files come back as text, PDFs and other files are saved to `out/files/` for you to open, or `mode='link'` returns the signed link). Files contain tenant data. Downloaded files and old results in `out/` are deleted after 14 days (`RM_OUT_KEEP_DAYS`, 0 = never).
+- `locations()` lists the locations (separate databases; IDs repeat). Every tool accepts `location='<name or id>'`.
+
 ## Maintenance
 | Command | When |
 |---|---|

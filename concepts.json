@@ -10,6 +10,14 @@
    "recipes": ["rent_roll", "vacancy_report"]
   },
   {
+   "id": "lease_audit",
+   "words": ["lease audit", "audit", "audit rent", "audit rent against lease", "lease vs rent roll", "lease vs rent", "compare lease", "lease compare", "lease pdf", "lease pdfs", "lease document", "lease documents", "lease rent"],
+   "pointer": "Lease audit (compare the lease with what is charged): lease rent = ALL tenant-paid rent charge types PLUS rental-assistance / subsidy charge types (RA, HAP, MS8...), summed per lease/tenant, compared with the rent the lease PDF states. Sources: (1) recurring charges on the tenant/unit: query RecurringCharges filters 'UnitID,in,(ids)' (or EntityKeyID + EntityType,eq,Tenant); summary='rent' already splits tenant portion, subsidy portion and total per tenant; (2) lease dates/IDs from Leases (StartDate, EndDate, TenantID, UnitID); (3) the lease PDFs: find_attachments (lease renewals, tenant history category Lease/Rider/Renewal; the PDF often sits on an EARLIER renewal) then download_file. Ledger rows (Tenants/{id}/Transactions) are posted history, not the audited rent. A rent roll can have two rows per unit (tenant + subsidy): sum per unit; it has no lease dates or IDs.",
+   "on_models": ["Leases", "LeaseRenewals", "RecurringCharges"],
+   "resources": ["RecurringCharges", "Leases", "LeaseRenewals"],
+   "recipes": ["rent_roll", "tenant_leases"]
+  },
+  {
    "id": "last_tenant",
    "words": ["last tenant", "previous tenant", "former tenant", "prior tenant", "who lived", "last lease"],
    "pointer": "Leases (UnitID, TenantID, MoveInDate, MoveOutDate). For the last tenant of a unit: query Leases with 'UnitID,in,(ids)', orderby '-MoveOutDate', first_per='UnitID' (one newest lease per unit, ONE call for all units).",
@@ -74,6 +82,8 @@
  "filter_quirks": {
   "RecurringCharges": "Spec lists PropertyID and TenantID as filters but the live API fails on them (HTTP 500). Use UnitID, EntityKeyID (tenant id; add EntityType,eq,Tenant), Unit.PropertyID, ChargeType.Name. A ToDate filter drops open-ended charges (ToDate empty), so never filter ToDate when looking for current rent.",
   "Transactions": "Only AccountID, Amount, Comment, Description, MasterPaymentID, Reference, TransactionDate are filterable. TransactionType is not: use local where='TransactionType,eq,Charge'.",
-  "Units": "IsVacant is an embed, not a filter. Use IsVacantAsOf,eq,date (strict) or the recipes."
- }
+  "Units": "IsVacant is an embed, not a filter. Use IsVacantAsOf,eq,date (strict) or the recipes.",
+  "HistoryNotes": "Nested owner filters (Tenant.TenantID, Unit.UnitID, Owner.OwnerID, Vendor.VendorID, Property.PropertyID, ServiceManagerIssue...) fail on the HistoryNotes collection (HTTP 404 or silently 0 rows). Use the sub-resource Tenants/{id}/HistoryNotes (also Units, Owners, Vendors, Properties, ServiceManagerIssues); query routes single-owner filters there itself. Files: find_attachments."
+ },
+ "bad_filters": {"HistoryNote": ["Tenant", "Unit", "Owner", "OwnerProspect", "Vendor", "Property", "Prospect", "ServiceManagerIssue"]}
 }

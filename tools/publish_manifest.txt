@@ -45,6 +45,7 @@ tests/test_unit_v7.py
 tests/test_unit_v8.py
 tests/test_unit_v9.py
 tests/test_unit_v10.py
+tests/test_unit_v11.py
 tools/make_issue.py
 tools/make_public_tree.py
 tools/publish_manifest.txt

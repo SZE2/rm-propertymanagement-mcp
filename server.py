@@ -8,13 +8,17 @@ Safety: only HTTP GET to the Rent Manager API (plus the token login inside rm.py
 Business data is always fetched live; only API structure (spec/) is cached.
 """
 import os, sys, re, json, time, csv, math, difflib, datetime, threading, traceback, urllib.parse
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rm, spec_index as SI
+from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as FuturesTimeout
 
-VERSION = "0.6.0-beta"
+class ThreadPoolExecutor(_TPE):
+    """Worker threads inherit the calling thread's `location` (see rm.set_location); ex.map goes through submit."""
+    def submit(self, fn, *a, **k):
+        return super().submit(rm.bind(fn), *a, **k)
+
+VERSION = "0.7.0-beta"
 OUT = os.path.join(HERE, "out")   # 5a: RM_OUT env overrides, read at call time via out_dir()
 LOCAL = os.path.join(HERE, "local")
 RECIPES = os.path.join(HERE, "recipes")
@@ -23,15 +27,16 @@ MAX_TEXT = 9000          # max characters returned to the model per call
 SHOW_ROWS = 40           # default rows shown inline
 OPS = {"eq", "ne", "gt", "ge", "lt", "le", "in", "ni", "ct", "sw", "ew", "bt"}
 
-INSTRUCTIONS = """Rent Manager, read-only, LIVE data. Tools: find_recipe, run_recipe, resolve, search_models, describe_model, enum_values, count, query, list_reports, report_info, run_report, report_pdf.
-FAST PATH, ONE call per step, never loop over tenants/units:
-1. A recipe fits (catalog is in run_recipe's description): run_recipe(name, params) directly. Dates: YYYY-MM-DD, 'September 2026', 'last month', 'ytd'; ranges: period='...'.
+INSTRUCTIONS = """Rent Manager, read-only, LIVE data. Tools: find_recipe, run_recipe, resolve, search_models, describe_model, enum_values, count, query, list_reports, report_info, run_report, report_pdf, find_attachments, download_file, locations.
+FAST PATH, ONE call per step, no per-tenant loops:
+1. A recipe fits (catalog is in run_recipe's description): run_recipe(name, params) directly. Dates: YYYY-MM-DD, 'September 2026', 'ytd'; ranges: period=.
 2. No recipe: list_reports(words) -> run_report(id, parameters). One report covers all properties.
-3. PDF wanted: report_pdf(report, properties), one PDF per property (rent roll 67).
-4. Else ONE filtered bulk query: search_models -> describe_model -> count -> query(resource, filters, fields, group_by/sum). Batch ids with UnitID,in,(1,2,3), never one call per unit.
+3. PDF wanted: report_pdf(report, properties), one PDF per property.
+4. Else ONE filtered bulk query: search_models -> describe_model -> count -> query(resource, filters, fields, group_by/sum). Batch ids: UnitID,in,(1,2,3).
 RENT = recurring charges (Rent + subsidy types; subsidy IS rent): query RecurringCharges summary='rent'. Ledger = paid history only.
-Vague property name: resolve(term) first (names, billing/LLC names, addresses, owners; '' lists all); no confident match: ask user. kind=tenant|unit|owner|vendor.
-SCOPE: if no property is named and one could be meant, ask which (or confirm the whole portfolio). Portfolio runs are allowed. Quote the 'Scope:' line and any 'Answer' line; quote numbers exactly, do no arithmetic. Long lists: give the out/ file path.
+Vague property name: resolve(term) first (names, LLC, addresses, owners; '' lists all); no confident match: ask user. kind=tenant|unit|owner|vendor.
+Files (lease PDFs): find_attachments -> download_file. Another database: location=name/ID on any tool.
+SCOPE: if no property is named, ask which or confirm the whole portfolio. Quote the 'Scope:' line and any 'Answer' line; quote numbers exactly, do no arithmetic.
 Filters 'Field,op,value' joined by ';'; ops eq ne gt ge lt le in ni ct sw ew bt; nested Property.IsActive,eq,true; orderby -Field.
 Nothing can be changed here."""
 
@@ -287,6 +292,52 @@ def flatten(row, prefix="", out=None, depth=0):
             out[key] = v
     return out
 
+def _short_text(items):
+    """A list the table cannot spread over rows -> readable one-line text (never cut off, never JSON)."""
+    out = []
+    for it in items:
+        if isinstance(it, dict):
+            sc = [(k, v) for k, v in flatten(it).items() if v not in (None, "", [], {})]
+            out.append(", ".join("%s=%s" % kv for kv in sc[:4]))
+        else:
+            out.append(str(it))
+    return " ; ".join(out)
+
+def explode(row, prefix="", depth=0, st=None):
+    """One raw API row -> list of flat rows. A list of objects (one-to-many embed) becomes ONE ROW PER CHILD with the parent's columns
+    repeated (children of children too, along one chain); a second unrelated list in the same row is written as short text instead
+    of multiplying rows. Empty list -> empty cell. Scalars lists -> comma text."""
+    st = st if st is not None else {"path": None}
+    rows = [{}]
+    def cross(alts):
+        return [dict(a, **b) for a in rows for b in alts]
+    for k, v in (row or {}).items():
+        key = prefix + k
+        if isinstance(v, dict) and depth < 3:
+            rows = cross(explode(v, key + ".", depth + 1, st))
+        elif isinstance(v, list):
+            kids = [x for x in v if isinstance(x, dict)]
+            if not v:
+                rows = cross([{key: ""}])
+            elif not kids and all(not isinstance(x, (dict, list)) for x in v):
+                rows = cross([{key: ",".join(str(x) for x in v)}])
+            elif kids and len(kids) == len(v) and depth < 3 and (st["path"] is None or key == st["path"] or key.startswith(st["path"] + ".")):
+                if st["path"] is None: st["path"] = key   # the first exploded list is the root of the chain; its descendants may explode too
+                alts = []
+                for x in v: alts += explode(x, key + ".", depth + 1, st)
+                rows = cross(alts)
+            else:
+                rows = cross([{key: _short_text(v)}])
+        else:
+            rows = cross([{key: v}])
+    return rows
+
+def flatten_rows(raw_rows):
+    out = []
+    for r in raw_rows:
+        out += explode(r)
+    return out
+
 def _num(v):
     try:
         return float(v)
@@ -484,6 +535,16 @@ def save(label, raw, flat_rows):
             w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(flat_rows)
     return jp, cp
 
+FILE_HINT = ("Show this file to the user in the chat if you can: use your file-sharing or attach tool (for example SendUserFile in Claude Code, "
+             "or copy it to the outputs folder in Cowork) with the path above, then tell the user they can save it from there. "
+             "If you cannot attach files (Desktop chat), give the path and say it is on their computer.")
+
+def file_lines(*paths, hint=True):
+    """'File: <full absolute path>' on its own line per saved file (easy to open), then one reminder line for the model."""
+    lines = ["File: %s" % os.path.abspath(p) for p in paths if p]
+    if lines and hint: lines.append(FILE_HINT)
+    return "\n".join(lines)
+
 def clip(text):
     if len(text) <= MAX_TEXT: return text
     return text[:MAX_TEXT] + "\n...[output clipped; full data in the saved file]"
@@ -517,10 +578,17 @@ _INDEX_REBUILT = [False]
 def _index_current(props):
     return all("billing" in p and "address" in p and "owners" in p for p in props)
 
+_LOC_PROPS = {}
+
 def properties(live=False):
     """Property index from local/aliases.json (user-editable nicknames) else live. live=True skips the file.
     A file from before v10 (no billing/address/owners) is rebuilt once per process (nicknames kept); if that fails the old names are used."""
     if live: return _live_properties()
+    loc = rm.current_location()
+    if loc:   # another location = another database: never use local/aliases.json (default location); live list, cached per process
+        if loc not in _LOC_PROPS:
+            _LOC_PROPS[loc] = _live_properties()
+        return _LOC_PROPS[loc]
     props = None
     try:
         with open(ALIASES, encoding="utf-8") as f:
@@ -740,6 +808,12 @@ def normalize_in(filters):
     f = _IN_BARE.sub(fix, f)
     return _BT_BARE.sub(lambda m: "%s,bt,(%s,%s)" % (m.group(1), m.group(3), m.group(4)), f)
 
+def bad_filter(model, f):
+    """Known-broken filter names for a model (concepts.json bad_filters): nested owner filters on history notes."""
+    for b in (concepts().get("bad_filters") or {}).get(model, []):
+        if f == b or f.startswith(b + "."): return True
+    return False
+
 def filterable_hint(model, f, mi, flt):
     """Closest filterable names + alias hint for a bad filter field."""
     al = {k.lower(): v for k, v in (concepts().get("field_aliases") or {}).items()}
@@ -792,6 +866,9 @@ def validate(model, fields="", embeds="", filters="", orderby=""):
         if len(parts) != 3:
             probs.append("filter '%s' must be Field,op,value" % clause); continue
         f, op, val = parts[0].strip(), parts[1].strip().lower(), parts[2].strip()
+        if f in flt and bad_filter(model, f):
+            probs.append("filter '%s' does not work on %s (HTTP 404 or 0 rows). Use the sub-resource Tenants/{id}/HistoryNotes (or Units/Owners/Vendors/Properties/ServiceManagerIssues/{id}/HistoryNotes); on the HistoryNotes collection query() routes one owner id there itself." % (f, model))
+            continue
         if f not in flt:
             if f.lower() in lower_fl: f = lower_fl[f.lower()]
             else:
@@ -859,8 +936,26 @@ def fetch_ordered(path, params, max_records=500, page_size=0, parallel=4, on_pag
             params["orderingOptions"] = ""
             return fetch(path, params, max_records, page_size, parallel, on_pages)
         if "given key was not present" in str(e):
-            raise ToolError(str(e) + " (usually an unsupported embed/orderby for this resource; try without them)")
+            raise ToolError("%s | %s" % (e, diagnose_key_error(path, params)))
         raise
+
+def diagnose_key_error(path, params):
+    """HTTP 404 'given key was not present': retry with ONE part removed at a time (pageSize 1, at most 4 calls) and say which part
+    makes the call work, plus what was sent. Never raises."""
+    sent = ", ".join("%s=%s" % (k, str(params[k])[:120]) for k in ("filters", "embeds", "fields", "orderingOptions") if params.get(k))
+    try:
+        for key, label in (("embeds", "an embed"), ("filters", "a filter"), ("fields", "a field"), ("orderingOptions", "the orderby")):
+            if not params.get(key): continue
+            p = {k: v for k, v in params.items() if k not in (key, "pageNumber")}
+            if key == "embeds": p.pop("fields", None)   # fields may reference the embed
+            p["pageSize"] = 1
+            s, h, d = api(path, p, timeout=15)
+            if s in (200, 204):
+                return "Retrying without %s works, so %s is the likely cause (sent: %s). Nested filters such as Tenant.TenantID often fail on collections: use the sub-resource (e.g. Tenants/{id}/HistoryNotes)." % (
+                    key if key != "orderingOptions" else "orderby", label, sent)
+    except Exception:
+        pass
+    return "Could not tell which part is bad (sent: %s). Try fewer embeds/fields, top-level filters only, no orderby." % (sent or "nothing")
 
 FANOUT_BUDGET = int(os.environ.get("RM_FANOUT_BUDGET", "50"))
 _fanout = {"ids": set(), "lock": threading.Lock()}
@@ -883,9 +978,16 @@ def check_fanout(r, pages, allow):
             raise ToolError("Per-record fan-out budget reached (%d different %s/{id} calls this session, budget %d). %s"
                             % (n, r["ctrl"], FANOUT_BUDGET, msg))
 
+_ID_SCOPE = re.compile(r"(?:^|;)\s*((?:Unit|Tenant|Lease|LeaseRenewal|Owner|Vendor|EntityKey|ParentLease)ID|Unit\.UnitID|Tenant\.TenantID)\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", re.I)
+
 def scope_from_filters(filters):
     m = re.search(r"(?:^|;)\s*PropertyID\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", filters or "", re.I)
-    if not m: return None
+    if not m:
+        m2 = _ID_SCOPE.search(filters or "")
+        if not m2: return None
+        ids = re.findall(r"\d+", m2.group(3))
+        shown = ",".join(ids[:8]) + (",... (%d ids)" % len(ids) if len(ids) > 8 else "")
+        return "filtered by %s in (%s) (not the whole portfolio)" % (m2.group(1), shown)
     ids = [int(x) for x in re.findall(r"\d+", m.group(2))]
     try:
         names = {p["id"]: p["name"] for p in properties()}
@@ -936,10 +1038,13 @@ def t_describe_model(model, section="summary", contains="", limit=150):
         items = ["%s%s:%s" % (k, "*" if k in fset_f else "", v) for k, v in mi["fields"].items() if c in k.lower()]
         return "%s fields (%d)%s (* = filterable):\n%s" % (mname, len(items), " containing '%s'" % c if c else "", ", ".join(items[:int(limit)]))
     if sec == "filters":
-        items = [f for f in mi["filters"] if c in f.lower()]
+        allf = [f for f in mi["filters"] if c in f.lower() and not bad_filter(mname, f)]
+        items = allf if c else [f for f in allf if "." not in f]
         items.sort(key=lambda x: (x.count("."), x))
-        return "%s filters (%d%s; nested ones use dots):\n%s%s" % (mname, len(items), " containing '%s'" % c if c else "",
-                ", ".join(items[:int(limit)]), "\n...more, pass contains=" if len(items) > int(limit) else "")
+        hidden = len(allf) - len(items)
+        return "%s filters (%d%s%s):\n%s%s%s" % (mname, len(items), " containing '%s'" % c if c else ", top-level", "; nested ones use dots" if c else "",
+                ", ".join(items[:int(limit)]), "\n...more, pass contains=" if len(items) > int(limit) else "",
+                "\n(%d nested filters such as Property.Name hidden: pass contains='Property.' (a prefix or any text) to list them)" % hidden if hidden else "")
     if sec == "embeds":
         items = [e for e in mi["embeds"] if c in e.lower()]
         items.sort(key=lambda x: (x.count("."), x))
@@ -958,7 +1063,7 @@ def t_describe_model(model, section="summary", contains="", limit=150):
     # summary
     scalar = [k for k in mi["fields"] if k not in eset]
     enums = ["%s:%s" % (k, v) for k, v in mi["fields"].items() if re.match(r"^e[A-Z]", str(v))]
-    top_f = [f for f in mi["filters"] if "." not in f]
+    top_f = [f for f in mi["filters"] if "." not in f and not bad_filter(mname, f)]
     top_e = [e for e in mi["embeds"] if "." not in e]
     ctrl = path.strip("/").split("/")[0] if path else None
     subs = list(((i["resources"].get(ctrl) or {}).get("subs") or {}).keys()) if ctrl and "/" not in path.strip("/") else []
@@ -1107,11 +1212,58 @@ def _date_col(fl, orderby=""):
         if pref in cols: return pref
     return next((c for c in cols if "date" in c.lower()), "")
 
-def t_query(resource, filters="", fields="", embeds="", orderby="", page_size=0, max_records=500, parallel=4,
+_NESTED_HIST = {"tenant.tenantid": "Tenants", "unit.unitid": "Units", "owner.ownerid": "Owners", "vendor.vendorid": "Vendors",
+                "property.propertyid": "Properties", "servicemanagerissue.servicemanagerissueid": "ServiceManagerIssues"}
+
+def route_history_filters(filters):
+    """HistoryNotes collection + a nested owner filter (Tenant.TenantID eq|in ...) -> (parent resource, [ids], remaining filters) or None.
+    The API answers those filters with 404 / 0 rows; the sub-resource <Parent>/{id}/HistoryNotes works."""
+    f = normalize_in(expand_dates(filters or ""))
+    keep, hit = [], None
+    for clause in split_top(f):
+        parts = clause.split(",", 2)
+        k = parts[0].strip().lower()
+        if k in _NESTED_HIST:
+            if len(parts) != 3 or parts[1].strip().lower() not in ("eq", "in") or hit:
+                raise ToolError("Filter '%s' does not work on the HistoryNotes collection. Use eq/in on ONE of %s, or the sub-resource directly: Tenants/{id}/HistoryNotes." % (clause, ", ".join(_NESTED_HIST)))
+            hit = (_NESTED_HIST[k], [int(x) for x in re.findall(r"\d+", parts[2])])
+        elif clause.strip():
+            keep.append(clause)
+    if not hit: return None
+    if not hit[1]: raise ToolError("No ids in the %s filter." % hit[0])
+    return hit[0], hit[1], ";".join(keep)
+
+def t_query(resource, filters="", **kw):
+    """Routes known-broken nested HistoryNotes filters to the working sub-resource, else _query_one."""
+    try:
+        r0 = find_resource(resource)
+    except ToolError:
+        r0 = None
+    if r0 and r0["ctrl"] == "HistoryNotes" and not r0["id"] and not r0.get("sub"):
+        routed = route_history_filters(filters)
+        if routed:
+            parent, ids, rest = routed
+            if len(ids) > 25: raise ToolError("Routing by %s needs one call per id; at most 25 ids (got %d). Narrow the ids." % (parent, len(ids)))
+            outs = []
+            for i in ids:
+                kw2 = dict(kw)
+                kw2["save_as"] = kw.get("save_as") or "%s_%d_HistoryNotes" % (parent, i)
+                outs.append(_query_one("%s/%d/HistoryNotes" % (parent, i), rest, **kw2))
+            return ("Routed: nested filters on the HistoryNotes collection fail in the API, so %d call(s) to %s/{id}/HistoryNotes were used instead.\n"
+                    % (len(ids), parent)) + "\n----\n".join(outs)
+    return _query_one(resource, filters, **kw)
+
+def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size=0, max_records=500, parallel=4,
             columns="", group_by="", sum="", sort="", top=0, where="", show=SHOW_ROWS, save_as="", allow_fanout=False,
             most_recent_first=False, first_per="", summary="", as_of="", _scope=None):
     t0 = time.time()
     r = find_resource(resource)
+    if r.get("model") == "Lease" and not r.get("sub") and not fields and not summary and not group_by and not columns:
+        # v11: the API's default Lease output has no StartDate/EndDate; ask for the useful columns (plus any embedded objects)
+        roots = []
+        for e in [x.strip() for x in (embeds or "").split(",") if x.strip()]:
+            if e.split(".")[0] not in roots: roots.append(e.split(".")[0])
+        fields = ",".join(["LeaseID", "TenantID", "UnitID", "PropertyID", "StartDate", "EndDate", "MoveInDate", "MoveOutDate", "NoticeDate", "ExpectedMoveOutDate"] + roots)
     check_fanout(r, 0, allow_fanout)
     if r.get("sub_all") and not filters:
         raise ToolError("%s across ALL records is very slow and can fail. Add filters (e.g. PropertyID,eq,N or a date range) or use %s/{id}/%s." % (r["path"], r["ctrl"], r["sub"]))
@@ -1155,13 +1307,17 @@ def t_query(resource, filters="", fields="", embeds="", orderby="", page_size=0,
     raw = rows
     if isinstance(rows, dict) or not isinstance(rows, list):
         rows = [rows] if isinstance(rows, dict) else [{"value": rows}]
-    flat = [flatten(x) for x in rows]
+    nrec = len(rows)
+    flat = flatten_rows(rows)
+    if len(flat) != nrec: pre_explode = "%d row(s) spread over %d lines: one line per child of a one-to-many embed, parent columns repeated" % (nrec, len(flat))
+    else: pre_explode = ""
     for f in flat:  # requested fields always present as columns (embeds can come back empty)
         for k in [x for x in fl.split(",") if x]: f.setdefault(k, None)
     if lsort: sort = sort or lsort
     pre_notes = [mrf_ignored] if mrf_ignored else []
-    if mrf_col and total > len(flat):
-        pre_notes.append("CAPPED: most_recent_first read the OLDEST %d of %d rows (API cannot sort descending), so the NEWEST rows are missing; add filters (property/date) to get them" % (len(flat), total))
+    if pre_explode: pre_notes.append(pre_explode)
+    if mrf_col and total > nrec:
+        pre_notes.append("CAPPED: most_recent_first read the OLDEST %d of %d rows (API cannot sort descending), so the NEWEST rows are missing; add filters (property/date) to get them" % (nrec, total))
     if summary:
         sinfo = {}
         if summary == "rent":
@@ -1171,7 +1327,7 @@ def t_query(resource, filters="", fields="", embeds="", orderby="", page_size=0,
             summ = summarize_ledger(flat)
         shown, tot, notes = post_process(summ, columns, None, group_by, sum, sort, top, where, first_per=first_per or None)
         notes.insert(0, "summary=%s of %d row(s)%s" % (summary, len(flat), "; total_rent = tenant_portion + subsidy_portion (subsidy IS rent)" if summary == "rent" else ""))
-        if total > len(flat): notes.insert(1, "PARTIAL: only %d of %d source rows were read, so the summary is incomplete (add filters)" % (len(flat), total))
+        if total > nrec: notes.insert(1, "PARTIAL: only %d of %d source rows were read, so the summary is incomplete (add filters)" % (nrec, total))
         if summary == "rent":
             if sinfo.get("not_counted"):
                 notes.append("NOT counted as rent: " + ", ".join("%s%s (%d tenants)" % (c, " " + d if d and d != c else "", n) for c, d, n in sinfo["not_counted"][:12])
@@ -1183,12 +1339,12 @@ def t_query(resource, filters="", fields="", embeds="", orderby="", page_size=0,
         shown, tot, notes = post_process(flat, columns, None, group_by, sum, sort, top, where, first_per=first_per or None,
                                          newest_first=mrf_col if (mrf_col and not sort and not group_by) else None)
         jp, cp = save(save_as or r["path"].strip("/").replace("/", "_"), raw, flat)
-    if (first_per or lsort) and not mrf_col and not summary and total > len(flat):
-        pre_notes.append("INCOMPLETE: %s applied to only %d of %d rows (max_records cap): raise max_records or add filters" % ("first_per" if first_per else "descending sort", len(flat), total))
+    if (first_per or lsort) and not mrf_col and not summary and total > nrec:
+        pre_notes.append("INCOMPLETE: %s applied to only %d of %d rows (max_records cap): raise max_records or add filters" % ("first_per" if first_per else "descending sort", nrec, total))
     notes = pre_notes + notes
     scope = _scope or scope_from_filters(flt) or ("record %s" % r["id"] if r["id"] else all_scope_label())
     head = "%s: %d of %d record(s)%s%s. Scope: %s" % (
-        r["path"], len(flat), total, " (CAPPED at max_records=%d; raise it to get all)" % max_records if total > len(flat) else "",
+        r["path"], nrec, total, " (CAPPED at max_records=%d; raise it to get all)" % max_records if total > nrec else "",
         "; " + "; ".join(notes) if notes else "", scope)
     if r.get("status") == 204 and not flat:
         head += "\nNote: this resource returned no rows at index time too; the API user may lack the privilege or property access."
@@ -1200,7 +1356,7 @@ def t_query(resource, filters="", fields="", embeds="", orderby="", page_size=0,
         dc = _date_col(fl, orderby)
         more = "\n(showing %d of %d rows%s)" % (nshow, len(shown), "" if mrf_col or not dc or sort or summary else
                                                "; these are the OLDEST rows by %s, the newest are cut: add most_recent_first=true or top=N with sort='-%s'; full data in the saved file" % (dc, dc))
-    return clip("%s\n%s%s\nSaved: %s%s\n(%.1fs, %d page(s), live)%s" % (head, body, more, jp, " | " + cp if cp else "", time.time() - t0, pages, hint))
+    return clip("%s\n%s%s\n%s\n(%.1fs, %d page(s), live)%s" % (head, body, more, file_lines(jp, cp), time.time() - t0, pages, hint))
 
 # ----------------------------------------------------------------------------- reports
 def report_by(id_or_name):
@@ -1373,9 +1529,9 @@ def t_run_report(id, parameters="", property="", all_properties=False, grid="", 
     if main and not (columns or group_by): out.append("Columns: " + ", ".join(list(main[0].keys())[:60]))
     out.append(table(shown, int(show or SHOW_ROWS), tot))
     if len(shown) > int(show or SHOW_ROWS): out.append("(showing %d of %d rows; full data in file)" % (int(show or SHOW_ROWS), len(shown)))
-    out.append("Saved: %s%s" % (jp, " | " + cp if cp else ""))
+    out.append(file_lines(jp, cp))
     out.append("(%.1fs, live)" % (time.time() - t0))
-    return clip("\n".join(out))
+    return clip("\n".join(out) + audit_note_for(rep["name"]))
 
 # ----------------------------------------------------------------------------- PDF export
 def api_bytes(path, params=None, timeout=None):
@@ -1464,11 +1620,12 @@ def t_report_pdf(report, properties="", parameters="", save_as=""):
         except ToolError as e:
             return "%s: FAILED - %s (%.1fs)" % (label, e, time.time() - t1), False
         fp = save_bytes("%s_%s" % (save_as or rep["name"], short), data)
-        return "%s: %s (%.0f KB, %.1fs)" % (label, fp, len(data) / 1024.0, time.time() - t1), True
+        return "%s: saved (%.0f KB, %.1fs)\n%s" % (label, len(data) / 1024.0, time.time() - t1, file_lines(fp, hint=False)), True
     with ThreadPoolExecutor(min(4, len(jobs))) as ex:
         res = list(ex.map(one, jobs))
     head = "Report %s (id %s) as PDF: %d of %d saved." % (rep["name"], rep["id"], sum(1 for r in res if r[1]), len(res))
     tail = "Scope: %s\nParameters: %s\n(%.1fs, live)" % (scope, ";".join("%s,%s" % (k, v) for k, v in base.items() if v not in (None, "")) or "(defaults)", time.time() - t0)
+    if any(r[1] for r in res): tail += "\n" + FILE_HINT
     if not any(r[1] for r in res): tail += "\nNo PDF was produced; use run_report for this report's data instead."
     return head + "\n" + "\n".join(r[0] for r in res) + "\n" + tail
 
@@ -1711,8 +1868,17 @@ def resolve_tenant(term, property_ids=None):
     raise ToolError("'%s' matches several tenants: %s. Ask the user which, then pass the TenantID." %
                     (term, "; ".join("%s=ID %s (property %s)" % (t["Name"], t["TenantID"], t["PropertyID"]) for t in d[:8])))
 
+AUDIT_NOTE = ("Lease audit note: if this is the basis of a lease audit, include rental assistance (RA) charges as rent; rent roll rows can be split "
+              "(tenant row + subsidy row for the same unit), so sum the rows per unit; rent roll has no lease dates or IDs: join to Leases for those.")
+_AUDIT_NAME = re.compile(r"rent\s*_?roll|recurring\s*_?charge", re.I)
+
+def audit_note_for(*names):
+    return ("\n" + AUDIT_NOTE) if any(_AUDIT_NAME.search(str(n or "")) for n in names) else ""
+
 def t_run_recipe(name, params=None, all_properties=False, show=SHOW_ROWS):
-    return run_recipe_result(name, params, all_properties, show)["text"]
+    text = run_recipe_result(name, params, all_properties, show)["text"]
+    rec = next((r for r in load_recipes() if _recipe_key(r["name"]) == _recipe_key(str(name))), None) or {}
+    return text + audit_note_for(rec.get("name"), rec.get("report"))
 
 def parse_basis(v):
     """basis param -> (eBasis value or "", label). Cash=2, Accrual=1; unspecified keeps the Rent Manager default (Cash)."""
@@ -1997,7 +2163,7 @@ def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None):
     head = "%s: %d of %d record(s)%s. Scope: %s" % (r["path"], len(flat), total, "; " + "; ".join(notes) if notes else "", scope)
     body = table(shown, int(common["show"] or SHOW_ROWS), tot)
     more = "" if len(shown) <= int(common["show"] or SHOW_ROWS) else "\n(showing %d of %d rows)" % (int(common["show"] or SHOW_ROWS), len(shown))
-    return clip("%s\n%s%s\nSaved: %s%s\n(%.1fs, %d page(s), live)" % (head, body, more, jp, " | " + cp if cp else "", time.time() - t0, pages))
+    return clip("%s\n%s%s\n%s\n(%.1fs, %d page(s), live)" % (head, body, more, file_lines(jp, cp), time.time() - t0, pages))
 
 # ----------------------------------------------------------------------------- resolve
 def t_resolve(term="", kind="property", property=""):
@@ -2039,6 +2205,503 @@ def t_resolve(term="", kind="property", property=""):
         except ToolError:
             pass
     return "%s matches for '%s' (%s of %s):\n%s%s" % (kind, term, len(d), h.get("x-total-results", len(d)), table([flatten(x) for x in d], 25), extra)
+
+# ----------------------------------------------------------------------------- v11: locations
+# Each Rent Manager location is a SEPARATE database: IDs (properties, units, tenants...) repeat across locations. Every tool accepts
+# location=<name or LocationID>; call_tool sets a thread-local that rm.get/get_bytes turn into the x-rm12api-locationid header.
+_LOCS = {"data": None}
+
+def load_locations(force=False):
+    """[{id, name, friendly, default}] from /Current/Locations (asked WITHOUT a location header, per the RM docs). Cached per process."""
+    if _LOCS["data"] is None or force:
+        try:
+            s, h, d = rm.get("/Current/Locations", {"fields": "LocationID,Name,FriendlyName,IsMainLocation"}, loc="")
+        except rm.RMError as e:
+            raise ToolError(str(e))
+        if s != 200 or not isinstance(d, list):
+            raise ToolError("Could not list locations: %s" % api_error(s, d))
+        env = str(rm.ENV.get("RM_LOCATION") or "").strip()
+        main = [str(x.get("LocationID")) for x in d if x.get("IsMainLocation")]
+        dflt = env or (main[0] if main else (str(d[0].get("LocationID")) if len(d) == 1 else ""))
+        _LOCS["data"] = [{"id": str(x.get("LocationID")), "name": x.get("Name") or x.get("FriendlyName") or ("Location %s" % x.get("LocationID")), "friendly": x.get("FriendlyName") or "",
+                          "default": str(x.get("LocationID")) == dflt} for x in d]
+    return _LOCS["data"]
+
+def resolve_location(v, locs=None):
+    """Name (exact, then unique partial) or LocationID -> location dict; unknown -> ToolError listing the choices."""
+    locs = locs if locs is not None else load_locations()
+    t = str(v).strip()
+    hit = [l for l in locs if l["id"] == t]
+    if not hit:
+        hit = [l for l in locs if t.lower() in (l["name"].lower(), l["friendly"].lower())]
+    if not hit and t:
+        hit = [l for l in locs if t.lower() in l["name"].lower() or t.lower() in l["friendly"].lower()]
+        if len(hit) > 1:
+            raise ToolError("Location '%s' is ambiguous: %s" % (t, "; ".join("%s (ID %s)" % (l["name"], l["id"]) for l in hit)))
+    if not hit:
+        raise ToolError("Unknown location '%s'. Locations: %s. (Each location is a separate database.)" % (
+            t, "; ".join("%s (ID %s)%s" % (l["name"], l["id"], ", default" if l["default"] else "") for l in locs) or "(none)"))
+    return hit[0]
+
+def t_locations():
+    t0 = time.time()
+    locs = load_locations(force=True)
+    def probe(l):
+        try:
+            s, h, d = rm.get("/Properties", {"fields": "PropertyID", "pageSize": 1}, loc=l["id"])
+        except Exception as e:
+            return "unknown (%s)" % type(e).__name__
+        return "yes" if s in (200, 204) else ("NO (HTTP %s: this API user has no access)" % s if s in (401, 403) else "unknown (HTTP %s)" % s)
+    with ThreadPoolExecutor(min(4, max(1, len(locs)))) as ex:
+        acc = list(ex.map(probe, locs[:30]))
+    lines = ["LocationID|name|default|accessible"]
+    for l, a in zip(locs, acc):
+        lines.append("%s|%s%s|%s|%s" % (l["id"], l["name"], " (%s)" % l["friendly"] if l["friendly"] and l["friendly"] != l["name"] else "", "yes" if l["default"] else "", a))
+    lines.append("Each location is a separate database: PropertyID/UnitID/TenantID values repeat across locations. Pass location='<name or id>' to any tool; "
+                 "omit it for the default. Scope lines name a non-default location.")
+    lines.append("Scope: locations visible to this API user (%d)\n(%.1fs, live)" % (len(locs), time.time() - t0))
+    return "\n".join(lines)
+
+def tag_location(text, loc):
+    """Name a non-default location in every 'Scope:' (or append a Location line)."""
+    text = str(text)
+    tag = "[Location %s, ID %s]" % (loc["name"], loc["id"])
+    if "Scope: " in text:
+        return text.replace("Scope: ", "Scope: %s " % tag)
+    return text + "\nScope: %s" % tag
+
+# ----------------------------------------------------------------------------- v11: attachments (find_attachments / download_file)
+HIST_SOURCES = {"tenant_history": "Tenants", "unit_history": "Units", "owner_history": "Owners", "vendor_history": "Vendors",
+                "service_issue": "ServiceManagerIssues", "property_history": "Properties"}
+UDF_PARENTS = {"tenant": "Tenants", "property": "Properties", "unit": "Units", "owner": "Owners", "vendor": "Vendors", "service_issue": "ServiceManagerIssues"}
+SOURCES = list(HIST_SOURCES) + ["lease", "property_files", "custom_field"]
+ATT_COLS = ["file_ref", "source", "parent_id", "item_id", "name", "ext", "description", "created", "item_date", "category", "size", "note"]
+TEXT_EXT = {"txt", "csv", "tsv", "json", "xml", "html", "htm", "md", "eml", "log"}
+INLINE_CAP = 20000      # characters of text returned inline
+PDF_CAP = 6000          # characters of PDF text returned
+_HISTCATS = {}
+
+def parse_ids(ids, what="ids", cap=None):
+    cap = cap or FANOUT_BUDGET
+    if isinstance(ids, bool): raise ToolError("%s must be numbers" % what)
+    if isinstance(ids, (int, float)): ids = [ids]
+    if isinstance(ids, str): ids = re.findall(r"-?\d+", ids)
+    try:
+        out = [int(x) for x in (ids or [])]
+    except (TypeError, ValueError):
+        raise ToolError("%s must be numbers (e.g. [123, 456])" % what)
+    out = list(dict.fromkeys(out))
+    if not out: raise ToolError("%s is required: one or more parent ids" % what)
+    if len(out) > cap: raise ToolError("At most %d %s per call (fan-out budget); split the list." % (cap, what))
+    return out
+
+def hist_categories():
+    """{HistoryCategoryID: Name} for the current location (one call, cached)."""
+    key = rm.current_location() or ""
+    if key not in _HISTCATS:
+        rows, total, pages, s = fetch("/HistoryCategories", {"fields": "HistoryCategoryID,Name"}, max_records=2000)
+        _HISTCATS[key] = {int(x["HistoryCategoryID"]): x.get("Name") or "" for x in (rows if isinstance(rows, list) else [])}
+    return _HISTCATS[key]
+
+def category_ids(cat):
+    """'Lease, Rider' or '3,6' -> [ids]. Exact name wins, else partial matches. Unknown -> ToolError with the names."""
+    cats = hist_categories()
+    out = []
+    for it in [x.strip() for x in str(cat).split(",") if x.strip()]:
+        if it.isdigit():
+            out.append(int(it)); continue
+        ex = [i for i, n in cats.items() if n.lower() == it.lower()]
+        part = ex or [i for i, n in cats.items() if it.lower() in n.lower()]
+        if not part:
+            raise ToolError("Unknown history category '%s'. Names: %s" % (it, ", ".join(sorted(cats.values())[:80])))
+        out += part
+    return list(dict.fromkeys(out))
+
+def _ext(e):
+    return str(e or "").strip().lstrip(".").lower()
+
+def att_row(ref, source, parent, item, f, created="", item_date="", category="", size="", note="", desc=""):
+    f = f or {}
+    return {"file_ref": ref, "source": source, "parent_id": parent, "item_id": item, "name": f.get("Name") or "", "ext": _ext(f.get("Extension")),
+            "description": desc or f.get("Description") or "", "created": str(created or f.get("CreateDate") or "")[:19].replace("T", " "),
+            "item_date": str(item_date or "")[:10], "category": category or "", "size": size if size not in (None, 0, -1) else "",
+            "note": re.sub(r"\s+", " ", str(note or "")).strip()[:100]}
+
+_HIST_FIELDS = ("HistoryID,HistoryDate,Note,FileID,HistoryCategoryID,HistoryCategory.Name,Attachment.FileID,Attachment.Name,Attachment.Extension,"
+                "Attachment.Description,Attachment.CreateDate,HistoryAttachments.FileID,HistoryAttachments.File.FileID,HistoryAttachments.File.Name,"
+                "HistoryAttachments.File.Extension,HistoryAttachments.File.Description,HistoryAttachments.File.CreateDate")
+
+def _hist_rows(source, pid, flt):
+    ctrl = HIST_SOURCES[source]
+    params = {"filters": ";".join(["FileID,gt,0"] + flt), "embeds": "Attachment,HistoryAttachments.File,HistoryCategory", "fields": _HIST_FIELDS}
+    rows, total, pages, s = fetch("/%s/%d/HistoryNotes" % (ctrl, pid), params, max_records=3000)
+    out = []
+    for n in (rows if isinstance(rows, list) else []):
+        cat = (n.get("HistoryCategory") or {}).get("Name") or ""
+        seen = set()
+        files = []
+        a = n.get("Attachment") or {}
+        if (a.get("FileID") or 0) > 0: files.append(a)
+        for h in n.get("HistoryAttachments") or []:
+            f = h.get("File") or {}
+            if (f.get("FileID") or 0) > 0: files.append(f)
+        for f in files:
+            if f["FileID"] in seen: continue
+            seen.add(f["FileID"])
+            out.append(att_row("history:%s:%s" % (n.get("HistoryID"), f["FileID"]), source, pid, n.get("HistoryID"), f,
+                               item_date=n.get("HistoryDate"), category=cat, note=n.get("Note")))
+    return out, 1
+
+def _lease_rows(ids, by):
+    key = "UnitID" if by == "unit" else "ParentLeaseID"
+    chunks = [ids[i:i + 40] for i in range(0, len(ids), 40)]
+    def one(c):
+        params = {"filters": "%s,in,(%s)" % (key, ",".join(str(i) for i in c)), "embeds": "LeaseRenewalAttachments",
+                  "fields": "LeaseRenewalID,ParentLeaseID,UnitID,StartDate,EndDate,LeaseRenewalAttachments"}
+        return fetch("/LeaseRenewals", params, max_records=5000)[0]
+    with ThreadPoolExecutor(min(4, len(chunks))) as ex:
+        parts = list(ex.map(one, chunks))
+    out, nren, noatt = [], 0, 0
+    for part in parts:
+        for lr in (part if isinstance(part, list) else []):
+            nren += 1
+            atts = lr.get("LeaseRenewalAttachments") or []
+            if not atts: noatt += 1
+            term = "term %s to %s" % (str(lr.get("StartDate") or "?")[:10], str(lr.get("EndDate") or "?")[:10])
+            for a in atts:
+                f = a.get("File") or {}
+                fid = f.get("FileID") or a.get("FileID")
+                if not fid: continue
+                out.append(att_row("leaserenewal:%s:%s" % (lr.get("LeaseRenewalID"), fid), "lease", lr.get("ParentLeaseID"), lr.get("LeaseRenewalID"),
+                                   f, category=str(a.get("LeaseAttachmentType") or ""), note="%s; unit %s" % (term, lr.get("UnitID"))))
+    return out, nren, noatt
+
+def _pfile_rows(pid):
+    params = {"embeds": "File,PropertyFolder", "fields": "PropertyFileID,PropertyID,FileID,Title,Description,FileSize,CreateDate,PropertyFolder.Name,"
+              "File.FileID,File.Name,File.Extension,File.Description,File.CreateDate"}
+    rows, total, pages, s = fetch("/Properties/%d/PropertyFiles" % pid, params, max_records=3000)
+    out = []
+    for p in (rows if isinstance(rows, list) else []):
+        f = dict(p.get("File") or {})
+        fid = f.get("FileID") or p.get("FileID")
+        if not fid or fid < 0: continue
+        f.setdefault("Name", p.get("Title") or "")
+        out.append(att_row("propertyfile:%s:%s" % (pid, fid), "property_files", pid, p.get("PropertyFileID"), f, created=p.get("CreateDate") or f.get("CreateDate"),
+                           category=(p.get("PropertyFolder") or {}).get("Name") or "", size=p.get("FileSize"),
+                           desc=p.get("Description") or p.get("Title") or f.get("Description") or ""))
+    return out
+
+def _udf_rows(parent, pid):
+    ctrl = UDF_PARENTS[parent]
+    params = {"filters": "Attachment.FileID,gt,0", "embeds": "Attachment", "fields": "UserDefinedValueID,UserDefinedFieldID,ParentID,Name,CreateDate,"
+              "Attachment.FileID,Attachment.Name,Attachment.Extension,Attachment.Description,Attachment.CreateDate"}
+    rows, total, pages, s = fetch("/%s/%d/UserDefinedValues" % (ctrl, pid), params, max_records=3000)
+    out = []
+    for v in (rows if isinstance(rows, list) else []):
+        f = v.get("Attachment") or {}
+        if (f.get("FileID") or 0) <= 0: continue
+        out.append(att_row("udf_%s:%s:%s" % (parent, pid, f["FileID"]), "custom_field", pid, v.get("UserDefinedValueID"), f, category=v.get("Name") or "",
+                           created=f.get("CreateDate") or v.get("CreateDate")))
+    return out
+
+def att_cell(v):
+    return str(v if v is not None else "").replace("\r", " ").replace("\n", " ").replace("|", "/")
+
+def t_find_attachments(source, ids, parent="", category="", name_contains="", extension="", start="", end="", limit=100):
+    t0 = time.time()
+    src = str(source or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if src not in SOURCES:
+        raise ToolError("source must be one of: %s" % ", ".join(SOURCES))
+    parent = str(parent or "").strip().lower()
+    if src == "custom_field":
+        parent = parent or "tenant"
+        if parent not in UDF_PARENTS: raise ToolError("For custom_field give parent=%s" % "|".join(UDF_PARENTS))
+    elif src == "lease":
+        parent = parent or "lease"
+        if parent not in ("lease", "unit"): raise ToolError("For lease, ids are LeaseIDs (parent='lease', default) or UnitIDs (parent='unit').")
+    idl = parse_ids(ids, "ids", cap=400 if src == "lease" else None)
+    flt = []
+    cat_ids = []
+    if src in HIST_SOURCES:
+        if category: cat_ids = category_ids(category); flt.append("HistoryCategoryID,in,(%s)" % ",".join(str(i) for i in cat_ids))
+        if start: flt.append("HistoryDate,ge,%s" % parse_date(start))
+        if end: flt.append("HistoryDate,le,%s" % parse_date(end, end=True))
+    notes, errors = [], []
+    rows, scanned = [], len(idl)
+    def one(i):
+        try:
+            if src in HIST_SOURCES: return i, _hist_rows(src, i, flt)[0], None
+            if src == "property_files": return i, _pfile_rows(i), None
+            return i, _udf_rows(parent, i), None
+        except ToolError as e:
+            return i, [], str(e)
+    if src == "lease":
+        rows, nren, noatt = _lease_rows(idl, parent)
+        notes.append("%d lease renewal row(s) found, %d without any attachment (the file may sit on an earlier renewal; check every row)" % (nren, noatt))
+    else:
+        with ThreadPoolExecutor(min(4, len(idl))) as ex:
+            for i, rr, err in ex.map(one, idl):
+                rows += rr
+                if err: errors.append("id %s: %s" % (i, err[:160]))
+        if errors and len(errors) == len(idl): raise ToolError("All %d id(s) failed. First: %s" % (len(idl), errors[0]))
+    # local filters (the API cannot filter these everywhere)
+    if category and src not in HIST_SOURCES:
+        cl = [c.strip().lower() for c in str(category).split(",") if c.strip()]
+        rows = [r for r in rows if any(c in r["category"].lower() for c in cl)]
+    if name_contains:
+        nc = str(name_contains).lower()
+        rows = [r for r in rows if nc in (r["name"] + " " + r["description"] + " " + r["note"]).lower()]
+    if extension:
+        ex_ = {_ext(e) for e in str(extension).split(",") if e.strip()}
+        rows = [r for r in rows if r["ext"] in ex_]
+    if src not in HIST_SOURCES and (start or end):
+        a_, b_ = (parse_date(start) if start else ""), (parse_date(end, end=True) if end else "9999")
+        rows = [r for r in rows if a_ <= (r["created"] or r["item_date"])[:10] <= b_]
+    rows.sort(key=lambda r: (r["created"] or r["item_date"]), reverse=True)
+    n = max(1, int(limit or 100))
+    shown = rows[:n]
+    parents = len({(r["parent_id"]) for r in rows})
+    loc = rm.current_location()
+    scope = "%s ids %s%s%s" % (src + (" (by %s)" % parent if parent else ""), ",".join(str(i) for i in idl[:10]), ",... (%d ids)" % len(idl) if len(idl) > 10 else "",
+                               "; filters: " + ", ".join(x for x in ("category=%s" % category if category else "", "name~%s" % name_contains if name_contains else "",
+                                                                  "ext=%s" % extension if extension else "", "from %s" % start if start else "", "to %s" % end if end else "") if x) if (category or name_contains or extension or start or end) else "")
+    head = "find_attachments: %d file(s) for %d of %d id(s)%s. file_ref goes to download_file; rows newest first; the signed download links are not shown." % (
+        len(rows), parents, scanned, "; " + "; ".join(notes) if notes else "")
+    if errors: head += "\nERRORS (those ids were skipped): " + " | ".join(errors[:5])
+    if len(rows) > n: head += "\nShowing %d of %d (raise limit, or filter by category/name_contains/extension/start/end)." % (n, len(rows))
+    body = "\n".join(["|".join(ATT_COLS)] + ["|".join(att_cell(r.get(c)) for c in ATT_COLS) for r in shown]) if shown else "(no files found)"
+    extra = ""
+    if len(rows) > n:
+        jp, cp = save("find_attachments", rows, rows)
+        extra = "\nAll rows saved (CSV):\n" + file_lines(cp or jp)
+    return "%s\n%s%s\nScope: %s (live; each location is a separate database)\n(%.1fs, %d call(s) max)" % (head, body, extra, scope, time.time() - t0, len(idl))
+
+# ---- download
+def files_dir():
+    return os.path.join(out_dir(), "files")
+
+def safe_name(name, fallback="file"):
+    """File name from untrusted text: last path part only, letters/digits/._- , no leading dots, no Windows device names, max 80 chars."""
+    base = re.split(r"[\\/]", str(name or ""))[-1]
+    base = re.sub(r"[^A-Za-z0-9._ -]+", "_", base).strip(" ._")[:80]
+    if not base or base.upper().split(".")[0] in ("CON", "PRN", "AUX", "NUL") or re.fullmatch(r"(COM|LPT)\d", base.upper().split(".")[0] or ""):
+        base = ("_" + base) if base else fallback
+    return base
+
+def reserve_file(label, ext, folder=None):
+    """Collision-safe exclusive create in out/files/ (never overwrites). Returns the path of the new empty file."""
+    d = folder or files_dir()
+    os.makedirs(d, exist_ok=True)
+    ext = re.sub(r"[^a-z0-9]", "", str(ext).lower())[:8] or "bin"
+    base = safe_name(label)
+    if base.lower().endswith("." + ext): base = base[: -(len(ext) + 1)]
+    n = 0
+    while True:
+        fp = os.path.join(d, "%s%s.%s" % (base, "" if n == 0 else "-%d" % (n + 1), ext))
+        try:
+            open(fp, "xb").close(); return fp
+        except FileExistsError:
+            n += 1
+
+_STAMPED = re.compile(r"_\d{8}-\d{6}(?:-\d+)?\.[A-Za-z0-9]+$")
+
+def prune_downloads(days=None, base=None, now=None):
+    """Delete OLD files this program created: regular files directly in out/ whose name has our _YYYYMMDD-HHMMSS stamp (query/report results,
+    PDFs) and any regular file directly in out/files/ (downloads). No deeper folders, no links, nothing else. Age = modified time; older than
+    RM_OUT_KEEP_DAYS (default 14; 0 = keep forever). Returns the number removed."""
+    try:
+        days = float(os.environ.get("RM_OUT_KEEP_DAYS", "14")) if days is None else float(days)
+    except ValueError:
+        days = 14.0
+    if days <= 0: return 0
+    top = base or out_dir()
+    cutoff = (now or time.time()) - days * 86400
+    n = 0
+    for d, only_stamped in ((top, True), (os.path.join(top, "files"), False)):
+        if not os.path.isdir(d): continue
+        for nm in os.listdir(d):
+            fp = os.path.join(d, nm)
+            try:
+                if (os.path.isfile(fp) and not os.path.islink(fp) and (not only_stamped or _STAMPED.search(nm))
+                        and os.path.getmtime(fp) < cutoff):
+                    os.remove(fp); n += 1
+            except OSError:
+                pass
+    return n
+
+_PRUNE = {"t": 0.0}
+
+def maybe_prune(now=None):
+    """Prune at most once per 24 h per process (called at start and on every tool call)."""
+    t = now or time.time()
+    if t - _PRUNE["t"] < 86400: return 0
+    _PRUNE["t"] = t
+    try: return prune_downloads()
+    except Exception: return 0
+
+_REF = re.compile(r"^([a-z_]+):(\d+):(\d+)$")
+
+def parse_ref(ref):
+    """'history:<HistoryID>:<FileID>' | 'leaserenewal:<LeaseRenewalID>:<FileID>' | 'propertyfile:<PropertyID>:<FileID>' | 'udf_<parent>:<ParentID>:<FileID>'
+    -> (kind, container id, FileID, endpoint path, params). Never calls the API."""
+    m = _REF.match(str(ref or "").strip().lower())
+    if not m: raise ToolError("Bad file_ref '%s'. Use a file_ref from find_attachments (e.g. history:123:456)." % str(ref)[:60])
+    kind, cid, fid = m.group(1), int(m.group(2)), int(m.group(3))
+    if kind == "history":
+        return kind, cid, fid, "/History/%d/Attachments" % cid, {}
+    if kind == "leaserenewal":
+        return kind, cid, fid, "/LeaseRenewals", {"filters": "LeaseRenewalID,eq,%d" % cid, "embeds": "LeaseRenewalAttachments"}
+    if kind == "propertyfile":
+        return kind, cid, fid, "/Properties/%d/PropertyFiles" % cid, {"embeds": "File"}
+    if kind.startswith("udf_") and kind[4:] in UDF_PARENTS:
+        return kind, cid, fid, "/%s/%d/UserDefinedValues" % (UDF_PARENTS[kind[4:]], cid), {"embeds": "Attachment", "filters": "Attachment.FileID,eq,%d" % fid}
+    raise ToolError("Unknown file_ref kind '%s'." % kind)
+
+def _find_file(o, fid):
+    """The File object with FileID == fid and a DownloadURL, anywhere inside an API reply."""
+    if isinstance(o, dict):
+        if o.get("FileID") == fid and o.get("DownloadURL"): return o
+        for v in o.values():
+            r = _find_file(v, fid)
+            if r: return r
+    elif isinstance(o, list):
+        for v in o:
+            r = _find_file(v, fid)
+            if r: return r
+    return None
+
+def resolve_ref(ref):
+    """file_ref -> fresh File dict (DownloadURL included) from the route that lists it. ToolError if gone."""
+    kind, cid, fid, path, params = parse_ref(ref)
+    s, h, d = api(path, params)
+    if s == 204 or (s == 200 and not d):
+        raise ToolError("file_ref %s: the item has no files now (HTTP %s). Run find_attachments again; check location=." % (ref, s))
+    if s != 200: raise ToolError("file_ref %s: %s" % (ref, api_error(s, d)))
+    f = _find_file(d, fid)
+    if not f: raise ToolError("file_ref %s: file %d not found under that item any more, or it has no download link." % (ref, fid))
+    return f
+
+def pdf_text(src, maxchars=PDF_CAP, max_pages=15):
+    """Plain text of the first pages of a PDF (bytes or path) when pdfplumber or pypdf is importable; (text, note). Never raises."""
+    import io
+    try:
+        data = src if isinstance(src, (bytes, bytearray)) else open(src, "rb").read(60 * 1024 * 1024)
+    except OSError:
+        return "", "could not read the file for text extraction"
+    txt, lib = "", None
+    try:
+        import pdfplumber
+        lib = "pdfplumber"
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for pg in pdf.pages[:max_pages]:
+                txt += (pg.extract_text() or "") + "\n"
+                if len(txt) > maxchars: break
+    except ImportError:
+        try:
+            import pypdf
+            lib = "pypdf"
+            rd = pypdf.PdfReader(io.BytesIO(data))
+            for pg in rd.pages[:max_pages]:
+                txt += (pg.extract_text() or "") + "\n"
+                if len(txt) > maxchars: break
+        except ImportError:
+            return "", "no PDF text library installed (pdfplumber or pypdf), so no text was extracted"
+        except Exception as e:
+            return "", "PDF text extraction failed (%s)" % type(e).__name__
+    except Exception as e:
+        return "", "PDF text extraction failed (%s)" % type(e).__name__
+    txt = txt.strip()
+    if len(txt) < 20:
+        return "", "no text found in the first pages (%s): this PDF is probably a scan (images only); a person has to read it" % lib
+    return txt[:maxchars], "text from the first pages via %s%s" % (lib, "; cut at %d characters" % maxchars if len(txt) > maxchars else "")
+
+def _download_one(ref="", url="", mode="auto", save_as="", return_text=True, cap=INLINE_CAP):
+    """One file -> text block. mode auto|text|link|save. Raises ToolError."""
+    mode = (mode or "auto").lower()
+    if mode not in ("auto", "text", "link", "save"): raise ToolError("mode must be auto, text, link or save")
+    meta = {}
+    if ref:
+        meta = resolve_ref(ref)
+        url = meta.get("DownloadURL")
+    elif url:
+        try: rm.check_file_url(url)
+        except rm.RMError as e: raise ToolError(str(e))
+    else:
+        raise ToolError("give file_ref (from find_attachments) or download_url")
+    name = meta.get("Name") or ""
+    ext = _ext(meta.get("Extension")) or (os.path.splitext(name)[1].lstrip(".").lower() if name else "")
+    if mode == "auto": mode = "text" if ext in TEXT_EXT else "save"
+    info = "%s%s | FileID %s" % (name or "(unnamed)", " (.%s)" % ext if ext else "", meta.get("FileID", "?"))
+    if mode == "link":
+        return ("%s\nDownloadURL: %s\nThis link is a signed capability URL: anyone holding it can download the file. Treat it like a password: do not paste it into "
+                "issues, chats or logs. Nothing was downloaded or saved." % (info, url))
+    try:
+        if mode == "text":
+            st, h, data, size, sha = rm.fetch_file(url)
+        else:
+            st = None
+    except rm.RMError as e:
+        raise ToolError("%s: %s%s" % (info, e, " (use mode='save' for big files)" if "limit" in str(e) else ""))
+    if mode == "text":
+        if st != 200: raise ToolError("%s: download failed (HTTP %s)" % (info, st))
+        ctype = h.get("content-type", "")
+        line = "%s | %d bytes | %s | sha256 %s | saved: nothing (mode=text)" % (info, size, ctype or "?", sha)
+        if data[:4] == b"%PDF":
+            if not return_text: return line
+            t, note = pdf_text(data)
+            return "%s\n%s%s" % (line, note, ("\n--- text ---\n" + t) if t else "") + ("" if t else "\nNot saved. Use mode='save' to keep the PDF for the user to open.")
+        if ext in TEXT_EXT or ctype.startswith("text/"):
+            if not return_text: return line
+            txt = data.decode("utf-8", "replace")
+            return "%s\n--- text%s ---\n%s" % (line, " (first %d of %d characters)" % (cap, len(txt)) if len(txt) > cap else "", txt[:cap])
+        return "%s\nBinary file (not text): nothing returned. Use mode='save' to save it to out/files/ for the user to open." % line
+    # save
+    fid = meta.get("FileID")
+    label = save_as or ((os.path.splitext(safe_name(name))[0] + ("_%s" % fid if fid else "")) if name else "attachment%s" % ("_%s" % fid if fid else ""))
+    fp = reserve_file(label, ext or "bin")
+    try:
+        st, h, _, size, sha = rm.fetch_file(url, dest=fp)
+        if st != 200 or sha is None:
+            raise ToolError("%s: download failed (HTTP %s)" % (info, st))
+    except rm.RMError as e:
+        _rm_empty(fp)
+        raise ToolError("%s: %s" % (info, e))
+    except ToolError:
+        _rm_empty(fp)
+        raise
+    ctype = h.get("content-type", "")
+    out = ["%s | %d bytes | %s | sha256 %s" % (info, size, ctype or "?", sha), file_lines(fp),
+           "Cowork/Claude Code models can read it from this path; Desktop chat models cannot. "
+           "It contains tenant data. Files in out/files/ are deleted after %s days." % (os.environ.get("RM_OUT_KEEP_DAYS", "14") or "14")]
+    with open(fp, "rb") as f: magic = f.read(4)
+    if magic == b"%PDF" and return_text:
+        t, note = pdf_text(fp)
+        out.append(note + (":\n--- text ---\n" + t if t else ""))
+    return "\n".join(out)
+
+def _rm_empty(fp):
+    """Remove the empty placeholder this call created (only if still empty)."""
+    try:
+        if os.path.isfile(fp) and os.path.getsize(fp) == 0: os.remove(fp)
+    except OSError:
+        pass
+
+def t_download_file(file_ref=None, download_url="", mode="auto", save_as="", return_text=True):
+    t0 = time.time()
+    refs = file_ref if isinstance(file_ref, (list, tuple)) else ([file_ref] if file_ref else [])
+    refs = [str(r).strip() for r in refs if str(r).strip()]
+    if len(refs) > 20: raise ToolError("At most 20 files per call.")
+    if not refs and not download_url: raise ToolError("give file_ref (from find_attachments; a list is allowed, max 20) or download_url")
+    if len(refs) <= 1:
+        res = _download_one(refs[0] if refs else "", "" if refs else download_url, mode, save_as, return_text)
+        return "%s\nScope: file %s (live; mode=%s)\n(%.1fs)" % (res, refs[0] if refs else "raw rentmanager.com URL", mode or "auto", time.time() - t0)
+    def one(r):
+        try: return "%s -> %s" % (r, _download_one(r, "", mode, "", return_text, cap=1500).replace("\n", "\n    "))
+        except ToolError as e: return "%s -> FAILED: %s" % (r, e)
+    with ThreadPoolExecutor(min(4, len(refs))) as ex:
+        res = list(ex.map(one, refs))
+    return "%d file(s) requested; text-like files are shown (first 1500 characters), binaries saved to out/files/:\n%s\nScope: %d file_ref(s) (live; mode=%s)\n(%.1fs)" % (
+        len(refs), "\n".join(res), len(refs), mode or "auto", time.time() - t0)
 
 # ----------------------------------------------------------------------------- MCP plumbing
 S = lambda d: {"type": "string", "description": d}
@@ -2087,17 +2750,31 @@ TOOLS = [
            "property": S("Property name(s)/ID(s), comma separated; empty = all properties"),
            "grid": S("Which grid to show (default: biggest)"), "save_as": S("Output file base name")}, **POST),
      ["id"], t_run_report),
+    ("find_attachments", "Rent Manager: find files stored in Rent Manager (lease PDFs, riders, tenant files) for parent ids. source: tenant_history|unit_history|owner_history|vendor_history|service_issue|property_history (history notes, one id each; filter by category name/id such as Lease, Rider, Renewal), lease (LeaseIDs, or parent='unit' with UnitIDs; lease-renewal attachments: a lease PDF often sits on an EARLIER renewal), property_files, custom_field (parent=tenant|property|unit|owner|vendor|service_issue). Returns one row per file with file_ref for download_file; nothing is downloaded. Max 50 ids (lease 400); ids are location-specific.",
+     {"source": S("tenant_history|unit_history|owner_history|vendor_history|service_issue|property_history|lease|property_files|custom_field"),
+      "ids": {"anyOf": [{"type": "integer"}, {"type": "string"}, {"type": "array", "items": {"type": ["integer", "string"]}}], "description": "Parent id(s): TenantIDs, LeaseIDs, PropertyIDs..."},
+      "parent": S("custom_field: tenant|property|unit|owner|vendor|service_issue; lease: lease (default) or unit"),
+      "category": S("History category name(s) or id(s), e.g. 'Lease,Rider'"), "name_contains": S("Text in file name, description or note"),
+      "extension": S("e.g. pdf or pdf,docx"), "start": S("Earliest date"), "end": S("Latest date"), "limit": I("Rows shown (100)")}, ["source", "ids"], t_find_attachments),
+    ("download_file", "Rent Manager: get a file found by find_attachments. mode=auto: text-like files (txt csv json xml html eml md) come back as text, PDFs/images/docs are saved to out/files/ for the USER to open (Cowork/Code models can read the saved path, Desktop chat cannot) plus extracted PDF text when a PDF library exists; text: in memory only, nothing saved; link: current signed DownloadURL (secret, never post it); save: always save. file_ref may be a list (max 20).",
+     {"file_ref": {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "file_ref(s) from find_attachments"},
+      "download_url": S("Alternative: a rentmanager.com download link"), "mode": S("auto (default) | text | link | save"),
+      "save_as": S("Saved file name (no path)"), "return_text": B("Return text of text/PDF files (default true)")}, [], t_download_file),
+    ("locations", "Rent Manager: list the locations (separate databases, IDs repeat) this API user can use; every tool takes location=<name or id>.",
+     {}, [], t_locations),
     ("report_pdf", "Rent Manager: PDF of a built-in report (PDF rent roll, PDF aged receivables...), one PDF file per property, saved to out/ for the USER to open. To answer questions about a report's content use run_recipe/run_report data, not the PDF.",
      {"report": S("Report ID or name, e.g. 67 (RentRoll)"),
       "properties": {"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "array", "items": {"type": ["string", "integer"]}}], "description": "Property names/IDs (list, comma string or one ID); one PDF each; empty = one portfolio-wide PDF"},
       "parameters": S("Other report options Key,Value;Key2,Value2 (see report_info)"), "save_as": S("File name prefix")}, ["report"], t_report_pdf),
 ]
 
+LOCATION_ARG = S("Location name or ID (separate database); omit = default; see locations")
 HIDDEN = {"page_size", "parallel", "save_as"}   # 1h: accepted (server defaults) but not advertised to the model
 
 TITLES = {"find_recipe": "Find recipe", "run_recipe": "Run recipe", "resolve": "Resolve names to IDs", "search_models": "Search API resources",
           "describe_model": "Describe resource", "enum_values": "Enum values", "count": "Count records", "query": "Query resource",
-          "list_reports": "List reports", "report_info": "Report parameters", "run_report": "Run report", "report_pdf": "Report as PDF"}
+          "list_reports": "List reports", "report_info": "Report parameters", "run_report": "Run report", "report_pdf": "Report as PDF",
+          "find_attachments": "Find attachments", "download_file": "Download file", "locations": "List locations"}
 LOCAL_ONLY = {"describe_model", "enum_values", "search_models", "list_reports", "report_info"}  # answered from the cached spec, no data call
 
 def tool_desc(name, desc):
@@ -2112,6 +2789,7 @@ def tool_list():
     out = []
     for n, d, p, r, _ in TOOLS:
         props = {k: v for k, v in p.items() if k not in HIDDEN}
+        props["location"] = LOCATION_ARG
         schema = {"type": "object", "properties": props, "required": r}
         if n == "run_recipe": schema["additionalProperties"] = True
         out.append({"name": n, "title": TITLES.get(n, n), "description": tool_desc(n, d), "inputSchema": schema,
@@ -2123,10 +2801,20 @@ def call_tool(name, args):
     if not fn: raise ToolError("Unknown tool '%s'" % name)
     props = next(t[2] for t in TOOLS if t[0] == name)
     args = {k: v for k, v in (args or {}).items() if v is not None}
+    maybe_prune()
+    loc_arg = args.pop("location", None)
     if name == "run_recipe": args = flatten_recipe_args(args)
     bad = [k for k in args if k not in props]
-    if bad: raise ToolError("Unknown argument(s) %s. Allowed: %s" % (bad, ", ".join(k for k in props if k not in HIDDEN)))
-    return fn(**args)
+    if bad: raise ToolError("Unknown argument(s) %s. Allowed: %s" % (bad, ", ".join(k for k in list(props) + ["location"] if k not in HIDDEN)))
+    loc = resolve_location(loc_arg) if loc_arg not in (None, "") else None
+    if loc and loc["default"]: loc = None   # the default location needs no override (and keeps local/aliases.json valid)
+    prev = rm.current_location()
+    try:
+        if loc: rm.set_location(loc["id"])
+        out = fn(**args)
+    finally:
+        rm.set_location(prev)
+    return tag_location(out, loc) if loc else out
 
 _wlock = threading.Lock()
 def send(msg):
@@ -2205,6 +2893,7 @@ def handle(msg):
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
 
 def serve():
+    maybe_prune()   # old result/PDF/download files (see prune_downloads); again once a day while running
     pool = ThreadPoolExecutor(4)
     for line in sys.stdin.buffer:
         line = line.strip()

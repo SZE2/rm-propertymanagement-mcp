@@ -71,6 +71,30 @@ def _throttle():
         reset = LAST_RATE.get("x-ratelimit-reset", "")
         time.sleep(min(30, max(1, int(reset) - int(time.time()))) if str(reset).isdigit() else 5)
 
+_LOC = threading.local()   # per-call location override (set by the MCP server for a call's `location` argument)
+
+def set_location(loc):
+    """Location (LocationID) used by get/get_bytes in THIS thread when no explicit loc is passed. None clears it."""
+    _LOC.v = str(loc) if loc not in (None, "") else None
+
+def current_location():
+    return getattr(_LOC, "v", None)
+
+def bind(fn):
+    """Wrap fn so a worker thread uses the location of the thread that created the wrapper."""
+    loc = current_location()
+    def run(*a, **k):
+        old = current_location(); set_location(loc)
+        try: return fn(*a, **k)
+        finally: set_location(old)
+    return run
+
+def _effective_loc(loc):
+    """None -> thread-local, else RM_LOCATION; '' -> no location header (default location of the user)."""
+    if loc is None:
+        loc = current_location() or ENV.get("RM_LOCATION")
+    return loc
+
 _TL = threading.local()   # per-thread (headers_s, body_s, bytes) of the last request, for the RM_TIMING log
 TIMING = ENV.get("RM_TIMING", "") not in ("", "0")
 
@@ -160,7 +184,7 @@ class _Transient(Exception): pass
 
 def get(path, params=None, loc=None, retry=True, extra_headers=None, _429=0, timeout=None):
     """GET only. Returns (status, headers, parsed_json_or_text)."""
-    loc = loc or ENV.get("RM_LOCATION")
+    loc = _effective_loc(loc)
     hdr = {"x-rm12api-apitoken": get_token()}
     if loc:
         hdr["x-rm12api-locationid"] = str(loc)
@@ -199,7 +223,7 @@ def get(path, params=None, loc=None, retry=True, extra_headers=None, _429=0, tim
 
 def get_bytes(path, params=None, loc=None, retry=True, extra_headers=None, _429=0, timeout=None, url_path=None):
     """GET only, binary-safe (PDF streams). Same throttle/token/retry rules as get(). Returns (status, headers, bytes)."""
-    loc = loc or ENV.get("RM_LOCATION")
+    loc = _effective_loc(loc)
     hdr = {"x-rm12api-apitoken": get_token()}
     if loc:
         hdr["x-rm12api-locationid"] = str(loc)
@@ -226,6 +250,80 @@ def get_bytes(path, params=None, loc=None, retry=True, extra_headers=None, _429=
     if s < 400:
         _touch_token()
     return s, h, b
+
+# ----------------------------------------------------------------------------- file downloads (signed rm12filereader links)
+MAX_FILE_BYTES = 2 * 1024 ** 3        # hard limit for a streamed download (2 GB)
+MAX_MEM_BYTES = 50 * 1024 ** 2        # limit for an in-memory download (mode=text)
+
+def file_host_ok(host):
+    h = (host or "").lower().rstrip(".")
+    return h == "rentmanager.com" or h.endswith(".rentmanager.com")
+
+def check_file_url(url):
+    """Only absolute https URLs on rentmanager.com / *.rentmanager.com, default port, no credentials. Returns the parsed URL."""
+    try:
+        u = urllib.parse.urlparse(str(url).strip())
+        port = u.port
+    except ValueError:
+        raise RMError("not a valid file URL")
+    if u.scheme != "https":
+        raise RMError("file URL must be https")
+    if not file_host_ok(u.hostname) or u.username or u.password or port not in (None, 443):
+        raise RMError("file URL host is not a rentmanager.com host; refusing to fetch it")
+    return u
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_file_url(urllib.parse.urljoin(req.full_url, newurl))   # raises RMError for another host / http
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def fetch_file(url, dest=None, max_bytes=None, timeout=None, _open=None):
+    """GET one absolute rentmanager.com https URL WITHOUT the API token (the link is a signed capability). GET only.
+    dest=None: read into memory (limit MAX_MEM_BYTES) and return the bytes. dest=path: stream to '<dest>.part' in chunks, then rename to dest
+    (never holds the file in memory; limit MAX_FILE_BYTES; over the limit the partial file is removed and RMError raised).
+    Returns (status, headers, data_or_None, size, sha256_hex). Non-200: nothing is written, data = first bytes of the reply."""
+    import hashlib
+    check_file_url(url)
+    limit = max_bytes or (MAX_MEM_BYTES if dest is None else MAX_FILE_BYTES)
+    _throttle()
+    opener = urllib.request.build_opener(_SafeRedirect)
+    req = urllib.request.Request(str(url).strip(), method="GET", headers={"User-Agent": "rm-mcp"})
+    try:
+        resp = (_open or opener.open)(req, timeout=timeout or DEFAULT_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read(2000), 0, None
+    with resp:
+        status = getattr(resp, "status", 200)
+        headers = {k.lower(): v for k, v in dict(resp.headers).items()}
+        try:
+            if int(headers.get("content-length", 0)) > limit:
+                raise RMError("file is larger than the %d MB limit" % (limit // 1024 ** 2))
+        except ValueError:
+            pass
+        h, n, chunks = hashlib.sha256(), 0, []
+        part = (dest + ".part") if dest else None
+        f = open(part, "wb") if part else None
+        try:
+            while True:
+                b = resp.read(65536)
+                if not b: break
+                n += len(b)
+                if n > limit:
+                    raise RMError("file is larger than the %d MB limit; download stopped" % (limit // 1024 ** 2))
+                h.update(b)
+                if f: f.write(b)
+                else: chunks.append(b)
+            if f:
+                f.close(); f = None
+                os.replace(part, dest)
+        except BaseException:
+            if f:
+                f.close()
+            if part and os.path.exists(part):
+                try: os.remove(part)   # our own partial file
+                except OSError: pass
+            raise
+    return status, headers, (None if dest else b"".join(chunks)), n, h.hexdigest()
 
 def get_all(path, params=None, loc=None, page_size=1000, max_records=None):
     params = dict(params or {})
