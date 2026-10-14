@@ -68,7 +68,7 @@
   {
    "id": "ledger",
    "words": ["ledger", "transactions", "payments", "paid", "charges posted", "last payment"],
-   "pointer": "Ledger = Tenants/{id}/Transactions (TransactionDate, TransactionType Charge/Payment/Credit, Description, Amount; only 7 filters). It is the posted/paid history, oldest first by default: pass most_recent_first=true (or summary='ledger') so the newest rows are not cut. Many tenants: do NOT loop; recipes payments_received / charges_by_type, or Charges/Payments with PropertyID and date filters.",
+   "pointer": "Ledger = Tenants/{id}/Transactions (TransactionDate, TransactionType Charge/Payment/Credit, Description, Amount; only 7 filters). It is the posted/paid history. One or several tenants: recipe tenant_ledger (tenant list, since/until, newest 1000 rows each, ledger running balance). Pulls are capped (default 5000 rows, the newest are kept, the answer starts with a CAPPED line). A whole property: do NOT loop per tenant; use the report suggestions (report 30 ChargeDetail), recipes payments_received / charges_by_type, or Charges/Payments with date filters.",
    "on_models": ["Transactions", "Charges", "Payments"],
    "resources": ["Charges", "Payments"],
    "recipes": ["tenant_ledger", "payments_received", "charges_by_type"]
@@ -85,5 +85,129 @@
   "Units": "IsVacant is an embed, not a filter. Use IsVacantAsOf,eq,date (strict) or the recipes.",
   "HistoryNotes": "Nested owner filters (Tenant.TenantID, Unit.UnitID, Owner.OwnerID, Vendor.VendorID, Property.PropertyID, ServiceManagerIssue...) fail on the HistoryNotes collection (HTTP 404 or silently 0 rows). Use the sub-resource Tenants/{id}/HistoryNotes (also Units, Owners, Vendors, Properties, ServiceManagerIssues); query routes single-owner filters there itself. Files: find_attachments."
  },
- "bad_filters": {"HistoryNote": ["Tenant", "Unit", "Owner", "OwnerProspect", "Vendor", "Property", "Prospect", "ServiceManagerIssue"]}
+ "bad_filters": {"HistoryNote": ["Tenant", "Unit", "Owner", "OwnerProspect", "Vendor", "Property", "Prospect", "ServiceManagerIssue"]},
+ "report_suggestions": [
+  {
+   "id": "ledger",
+   "words": [
+    "ledger",
+    "tenant ledger",
+    "full ledger",
+    "tenant history",
+    "statement",
+    "statements",
+    "tenant statement",
+    "charges and payments",
+    "charges and receipts",
+    "account history",
+    "payment history",
+    "transactions",
+    "running balance"
+   ],
+   "resources": [
+    "Transactions"
+   ],
+   "short": "report 30 ChargeDetail (StartDate, EndDate, PropertyIDs; one row per charge with the payments applied, tenant name in AccountsName, TenantID in AccountsAccountID) or, for one tenant, Tenants/{id}/Transactions with a date range (recipe tenant_ledger: since=, until=, tenants=[...])",
+   "text": "Tenant ledger / statement / charges and payments, pick the narrowest that fits: (1) ONE or SEVERAL tenants: recipe tenant_ledger (tenant or tenants=[...] list, since=, until=, newest rows first, running balance); it reads Tenants/{id}/Transactions with a date range. (2) All tenants at a property for a date range: report 30 ChargeDetail (StartDate, EndDate, PropertyIDs; one row per charge with payments applied; AccountsName = 'Last, First', AccountsAccountID = TenantID, so keep one tenant with where='AccountsAccountID,eq,<TenantID>'). (3) Totals per tenant: reports 29 ChargedBreakdown (charges) and 25 ReceiptsBreakdown (receipts), StartDate, EndDate, PropOwnerIDs. (4) Totals per charge type for a property: report 1040 ChargesReceiptsDetail with parameters 'BatchProps,True' (summary per charge type, not per tenant; without BatchProps it is empty). (5) Postings with tenant and unit: report 51 GeneralLedger (PropOwnerIDs, StartDate, EndDate; CustomerName = 'First Last', UnitName; many rows). Statements 284 Statement85x11 and 851 StatementOption2 cannot return JSON and their PDF failed in testing. No built-in report takes a tenant filter: filter the rows by tenant name or id."
+  },
+  {
+   "id": "charges",
+   "words": [
+    "charges",
+    "charge",
+    "charges by type",
+    "charges posted",
+    "billed",
+    "billing"
+   ],
+   "resources": [
+    "Charges"
+   ],
+   "short": "report 30 ChargeDetail (StartDate, EndDate, PropertyIDs, CHARGESTOINCLUDE; one row per charge) or 29 ChargedBreakdown (totals per tenant and charge type) or recipe charges_by_type",
+   "text": "Charges: report 30 ChargeDetail (StartDate, EndDate, PropertyIDs, CHARGESTOINCLUDE; one row per charge with the payments applied and the tenant name), report 29 ChargedBreakdown (totals per tenant and per charge type, PropOwnerIDs), report 1040 ChargesReceiptsDetail with 'BatchProps,True' (charges vs receipts per charge type), or recipe charges_by_type. The Charges collection is huge (hundreds of thousands of rows): always filter by date and, for one tenant, use Tenants/{id}/Transactions."
+  },
+  {
+   "id": "payments",
+   "words": [
+    "payments",
+    "payment",
+    "receipts",
+    "receipt",
+    "deposits received",
+    "what did tenants pay",
+    "collections"
+   ],
+   "resources": [
+    "Payments"
+   ],
+   "short": "report 25 ReceiptsBreakdown (StartDate, EndDate, PropOwnerIDs; receipts per tenant and deposit) or recipe payments_received; payments cannot be filtered by property in the API",
+   "text": "Payments: report 25 ReceiptsBreakdown (StartDate, EndDate, PropOwnerIDs; receipts per tenant and per deposit), report 30 ChargeDetail (payments applied to each charge, per property), or recipe payments_received. Report 28 AllReceiptsDeposited returns no JSON. The Payments collection cannot be filtered by property and is huge: always filter TransactionDate, and for one tenant use Tenants/{id}/Transactions."
+  },
+  {
+   "id": "history",
+   "words": [
+    "history",
+    "history notes",
+    "notes",
+    "tenant notes",
+    "tenant history notes",
+    "call log",
+    "attachments history"
+   ],
+   "resources": [
+    "History",
+    "HistoryNotes"
+   ],
+   "short": "report 18 HistNotesCust (StartDate, EndDate, PropertyIDs, HISTCATEGORYIDS; one row per note with the tenant name) or, for one parent, Tenants/{id}/HistoryNotes",
+   "text": "History notes: report 18 HistNotesCust (StartDate, EndDate, PropertyIDs, HISTCATEGORYIDS; one row per note with tenant name and category), or for one tenant/unit/owner Tenants/{id}/HistoryNotes (also Units, Owners, Vendors, Properties). Files on notes: find_attachments. Never pull History unfiltered or with attachments embedded: it runs out of memory."
+  },
+  {
+   "id": "recurring",
+   "words": [
+    "recurring charges",
+    "recurring charge",
+    "scheduled charges",
+    "rent schedule",
+    "monthly charges"
+   ],
+   "resources": [
+    "RecurringCharges"
+   ],
+   "short": "report 781 RecurringChargeSearch (StartDate, EndDate only; one row per recurring charge) or query RecurringCharges with summary='rent'",
+   "text": "Recurring charges: report 781 RecurringChargeSearch (StartDate, EndDate; optional CHARGETYPE, Name; no property filter, about two thousand rows portfolio-wide; one row per recurring charge with EntityKeyID, Name, ChargeType, Amount, FromDate, ToDate), or query RecurringCharges with summary='rent' (per tenant tenant+subsidy portions). Lease audit: include rental assistance (RA) charges as rent."
+  },
+  {
+   "id": "leases",
+   "words": [
+    "leases",
+    "lease",
+    "rent roll",
+    "lease expiration",
+    "lease expirations",
+    "expiring leases"
+   ],
+   "resources": [
+    "Leases"
+   ],
+   "short": "report 69 SummaryRentRoll (PropOwnerIDs, StartDate, EndDate), 67 RentRoll (AsOfDate), 76 LeaseExpiration (PropertyIDs, CheckedDateRange)",
+   "text": "Leases: report 69 SummaryRentRoll (PropOwnerIDs, StartDate, EndDate; one row per unit), report 67 RentRoll (AsOfDate, PropOwnerIDs; detail per tenant and charge), report 76 LeaseExpiration (PropertyIDs, CheckedDateRange 'YYYY-MM-DD - YYYY-MM-DD'), or recipes rent_roll / lease_expirations."
+  },
+  {
+   "id": "gl",
+   "words": [
+    "general ledger",
+    "gl",
+    "journal",
+    "journals",
+    "gl detail",
+    "account activity"
+   ],
+   "resources": [
+    "Journals",
+    "GLAccounts"
+   ],
+   "short": "report 51 GeneralLedger (PropOwnerIDs, StartDate, EndDate) or 142 GeneralLedgerUnit (PropertyID, UNITID)",
+   "text": "General ledger: report 51 GeneralLedger (PropOwnerIDs, StartDate, EndDate, Basis, GLAccountIDs; postings with description, debit, credit, CustomerName, UnitName), report 142 GeneralLedgerUnit (one PropertyID, UNITID, dates), or recipe gl_activity."
+  }
+ ]
 }

@@ -412,7 +412,7 @@ class QueryFixes(unittest.TestCase):
         self.assertLessEqual(len(server.INSTRUCTIONS), 1500)
         for n in ("find_attachments", "download_file", "locations"): self.assertIn(n, server.INSTRUCTIONS)
         for t in server.tool_list(): self.assertLessEqual(len(t["description"]), 1900, t["name"])
-        self.assertEqual(server.VERSION, "0.7.0-beta")
+        self.assertTrue(server.VERSION.startswith("0.7."))
 
 
 class LeaseAudit(unittest.TestCase):

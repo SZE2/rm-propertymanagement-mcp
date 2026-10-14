@@ -1,7 +1,7 @@
 {
  "name": "tenant_ledger",
- "description": "A tenant's ledger: every charge, payment and credit with running balance, NEWEST FIRST by default (oldest_first=true flips it). Rent is not read from here: use recurring charges (query summary='rent') for what the rent is.",
- "use": "A tenant's charges, payments, balance",
+ "description": "A tenant's ledger (one or several tenants): every charge, payment and credit with running balance, NEWEST FIRST by default (oldest_first=true flips it). Reads the newest 1000 rows per tenant (max_rows raises it up to 20000); since= / until= limit the dates; tenants may be a list. The answer starts with CAPPED when rows are missing. Rent is not read from here: use recurring charges (query summary='rent') for what the rent is.",
+ "use": "Tenant ledgers, balance; since/until",
  "keywords": [
   "ledger",
   "tenant ledger",
@@ -12,23 +12,49 @@
   "payment history",
   "what did tenant pay",
   "rent changes",
-  "late payments"
+  "late payments",
+  "several tenants",
+  "tenants at a property",
+  "full ledger",
+  "ledger history",
+  "transaction history"
  ],
  "heavy": false,
  "params": {
   "tenant": {
    "type": "tenant",
-   "description": "Tenant name (or part) or TenantID"
+   "aliases": [
+    "tenants"
+   ],
+   "description": "Tenant name (or part) or TenantID; SEVERAL: a list ['Smith', 'Jones'] or 'Smith; Jones' (a ',' belongs to 'Last, First'). Max 25."
   },
   "property": {
    "type": "property",
    "default": "",
    "description": "Optional: property to narrow the tenant name search"
   },
+  "since": {
+   "type": "date",
+   "default": "",
+   "description": "Only rows on/after this date (YYYY-MM-DD, 'September 2026')",
+   "advanced": true
+  },
+  "until": {
+   "type": "date",
+   "default": "",
+   "description": "Only rows on/before this date",
+   "advanced": true
+  },
   "oldest_first": {
    "type": "bool",
    "default": false,
    "description": "list oldest first (default newest first)",
+   "advanced": true
+  },
+  "max_rows": {
+   "type": "int",
+   "default": 1000,
+   "description": "Rows per tenant (newest kept; default 1000, up to 20000)",
    "advanced": true
   }
  },
@@ -37,7 +63,10 @@
    "resource": "Tenants/{tenant}/Transactions",
    "fields": "TransactionDate,TransactionType,Description,Reference,Comment,Amount,Unit.Name",
    "orderby": "TransactionDate",
-   "max_records": 20000
+   "filters": [
+    "TransactionDate,ge,{since}",
+    "TransactionDate,le,{until}"
+   ]
   }
  },
  "post": {
@@ -56,5 +85,6 @@
  "facts": {
   "transactions": "count",
   "ending_balance": "newest:RunningBalance"
- }
+ },
+ "multi_tenant": true
 }

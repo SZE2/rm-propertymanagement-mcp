@@ -139,7 +139,8 @@ class NewestLease(unittest.TestCase):
         def f(path, prm, mx, *a, **k): return [{"TransactionDate": "2020-01-01T00:00:00", "Amount": 1.0} for _ in range(5)], 25000, 1, 200
         with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"RM_OUT": td}), mock.patch.object(server, "fetch_ordered", f):
             txt = server.t_query("Tenants/5/Transactions", fields="TransactionDate,Amount", most_recent_first=True)
-            self.assertIn("NEWEST rows are missing", txt)
+            self.assertTrue(txt.startswith("CAPPED: showing the first 5 of 25000 rows"), txt[:120])
+            self.assertIn("newest rows could not be selected", txt)
             txt = server.t_query("Tenants/5/Transactions", fields="TransactionDate,Amount", most_recent_first=True, sort="Amount")
             self.assertIn("most_recent_first ignored: sort given", txt)
 

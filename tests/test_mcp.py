@@ -102,7 +102,8 @@ def main():
     # fan-out guard: with a budget of 2, the 3rd different Tenants/{id} call must be refused
     c2 = Client(dict(os.environ, RM_FANOUT_BUDGET="2"))
     c2.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})
-    ids = [l.split("|")[0] for l in c2.call("query", {"resource": "Tenants", "fields": "TenantID", "max_records": 3})[2].splitlines()[2:5]]
+    lines = c2.call("query", {"resource": "Tenants", "fields": "TenantID", "max_records": 3})[2].splitlines()
+    ids = [l.split("|")[0] for l in lines[lines.index("TenantID") + 1:][:3]]   # rows after the header (a CAPPED line may come first)
     errs = [c2.call("query", {"resource": "Tenants/%s/Balance" % i})[1] for i in ids]
     c2.close()
     fan_ok = errs == [False, False, True]

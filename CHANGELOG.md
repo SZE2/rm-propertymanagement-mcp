@@ -4,6 +4,13 @@ All notable changes to this project. Format: [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.7.1-beta] - 2026-10-14
+- Added: row cap. A raw-row pull returns at most `RM_MAX_ROWS` rows (default 5000); an explicit `max_records` raises it up to `RM_MAX_ROWS_HARD` (default 20000). Whenever rows are missing the answer starts with a `CAPPED: showing the newest N of M rows ...` line (newest rows are kept where the API can sort by date) that says how to get the rest.
+- Added: Rent Manager `OutOfMemoryException` handling. The request is retried with smaller pages (1000, 500, 250, 100, 50); rows already read come back flagged `PARTIAL`; otherwise a clear error with narrowing advice. `run_report` gets the same message.
+- Added: `report_suggestions` in `concepts.json`: which built-in report covers a ledger, charges, payments, history notes, recurring charges, leases or the general ledger. Shown by `find_recipe` and `search_models` and inside the CAPPED and out-of-memory text.
+- Changed: `tenant_ledger` reads the newest 1000 rows per tenant by default, accepts `since`, `until`, `max_rows` and several tenants (`tenant` as a list), and its running balance is the ledger's own balance even when older rows are not listed.
+- Changed: the `most_recent_first` notice no longer says the newest rows are missing: the newest rows are now read first.
+
 ## [0.7.0-beta] - 2026-10-14
 - Added: `find_attachments` finds files attached in Rent Manager (tenant, unit, owner, vendor and property history notes, service issues, leases and lease renewals, property files, custom fields). One full row per file, newest first.
 - Added: `download_file` with three modes: `text` (returns the words, saves nothing), `link` (returns Rent Manager's own signed download link, saves nothing) and `save` (writes the file to `out/files/`). PDF text is extracted when `pdfplumber` or `pypdf` happens to be installed. Files stream to disk with a 2 GB limit; only `rentmanager.com` addresses are fetched, and the API token is never sent to the file server.
@@ -26,6 +33,7 @@ First public release. Unofficial, read-only, beta.
 
 Before this release the project went through internal development iterations (labelled v1 to v10 in private notes). They were never published and are not part of the public version history.
 
-[Unreleased]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.7.0-beta...HEAD
+[Unreleased]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.7.1-beta...HEAD
+[0.7.1-beta]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.7.0-beta...v0.7.1-beta
 [0.7.0-beta]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.6.0-beta...v0.7.0-beta
 [0.6.0-beta]: https://github.com/SZE2/rm-propertymanagement-mcp/releases/tag/v0.6.0-beta

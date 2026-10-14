@@ -18,7 +18,7 @@ class ThreadPoolExecutor(_TPE):
     def submit(self, fn, *a, **k):
         return super().submit(rm.bind(fn), *a, **k)
 
-VERSION = "0.7.0-beta"
+VERSION = "0.7.1-beta"
 OUT = os.path.join(HERE, "out")   # 5a: RM_OUT env overrides, read at call time via out_dir()
 LOCAL = os.path.join(HERE, "local")
 RECIPES = os.path.join(HERE, "recipes")
@@ -183,6 +183,33 @@ def concept_lines(query):
     for c in concept_hits(query):
         out.append("Where is the data (%s): %s%s" % (c["id"], c["pointer"], (" Recipes: " + ", ".join(c["recipes"])) if c.get("recipes") else ""))
     return out
+
+def _qwords(s):
+    return " " + re.sub(r"[^a-z0-9&]+", " ", str(s).lower()).strip() + " "
+
+def suggestion_hits(query, limit=2):
+    """report_suggestions (concepts.json) whose trigger words appear in the query, best (longest phrase) first."""
+    q = _qwords(query)
+    hits = []
+    for c in concepts().get("report_suggestions", []):
+        n = max([len(w.split()) for w in c.get("words", []) if _qwords(w) in q] or [0])
+        if n: hits.append((n, c))
+    hits.sort(key=lambda x: -x[0])
+    return [c for _, c in hits[:limit]]
+
+def suggestion_lines(query):
+    return ["Built-in report suggestion (%s): %s" % (c["id"], c["text"]) for c in suggestion_hits(query)]
+
+def suggestion_for_path(path):
+    """report_suggestions entry for an API path or resource name ('/Tenants/5/Transactions', 'Charges'), else None."""
+    segs = {x.lower() for x in re.split(r"[/?]", str(path)) if x and not x.isdigit()}
+    for c in concepts().get("report_suggestions", []):
+        if segs & {r.lower() for r in c.get("resources", [])}: return c
+    return None
+
+def report_hint(path):
+    c = suggestion_for_path(path)
+    return c["short"] if c else ""
 
 def model_notes(names):
     """Pointers + filter quirks for describe_model; names = resource/model names (case-insensitive)."""
@@ -889,52 +916,191 @@ def validate(model, fields="", embeds="", filters="", orderby=""):
         else: order = name
     return ",".join(fixed_fields), ",".join(fixed_emb), ";".join(filt), (local_sort, order), probs
 
-def fetch(path, params, max_records=500, page_size=0, parallel=4, on_pages=None):
-    """Paged GET; parallel pages after the first. Returns (rows, total, pages, status).
-    on_pages(n) is called with the page count before pages 2..n are fetched (fan-out guard)."""
+def _env_int(name, default):
+    try: return max(1, int(os.environ.get(name, "") or default))
+    except ValueError: return default
+
+MAX_ROWS = _env_int("RM_MAX_ROWS", 5000)                         # default rows per raw-row pull
+MAX_ROWS_HARD = max(MAX_ROWS, _env_int("RM_MAX_ROWS_HARD", 20000))   # ceiling for an explicit max_records
+OOM_LADDER = (1000, 500, 250, 100, 50)                           # page sizes tried after a server OutOfMemory
+CHRONO_DEFAULT = {"transactions"}   # the API cannot sort these (HTTP 404) but returns them oldest first (verified on many ledgers)
+
+def row_limit(max_records=0, hard=False):
+    """Rows to pull: no max_records = RM_MAX_ROWS; an explicit max_records is honoured up to RM_MAX_ROWS_HARD; hard=True = the ceiling."""
+    if hard: return MAX_ROWS_HARD
+    try: n = int(max_records or 0)
+    except (TypeError, ValueError): n = 0
+    return min(n, MAX_ROWS_HARD) if n > 0 else MAX_ROWS
+
+class Rows(list):
+    """Fetched rows plus how the pull went: partial = out-of-memory message when it stopped early; newest = the newest slice was read;
+    order_dropped = the API refused the sort."""
+    partial = ""
+    newest = False
+    order_dropped = False
+    chrono = False        # read in the API's own order, which is oldest first for this resource
+
+class RMOutOfMemory(ToolError):
+    def __init__(self, msg, rows=None):
+        ToolError.__init__(self, msg)
+        self.rows = list(rows or [])
+
+def is_oom(s, d):
+    return s == 500 and "outofmemoryexception" in (d if isinstance(d, str) else json.dumps(d)).lower()
+
+OOM_PREFIX = "Rent Manager ran out of memory on this request (its limit, not a bug here). Narrow it: date range, property, tenant, fewer embeds. "
+
+def oom_message(path):
+    h = report_hint(path)
+    return OOM_PREFIX + ("Built-in report that covers this: %s." % h if h else "Built-in report for this data: use list_reports / search_models.")
+
+def cap_line(shown, total, kind, path, limit=None):
+    """The one-line CAPPED notice (kind: newest | oldest | first). total = the API total when known."""
+    tot = ("%d" % total) if total and total >= shown else "an unknown number of"
+    h = report_hint(path)
+    return ("CAPPED: showing the %s %d of %s rows. More exist. To see them: narrow by date range or property/tenant%s. "
+            "Limit here: %d rows (default RM_MAX_ROWS); an explicit max_records raises it up to %d (RM_MAX_ROWS_HARD)."
+            % (kind, shown, tot, (", or use " + h) if h else "", limit or MAX_ROWS, MAX_ROWS_HARD))
+
+def cap_kind(rows, order=""):
+    """newest | oldest | first: which end of the table a capped pull kept."""
+    if getattr(rows, "newest", False): return "newest"
+    if getattr(rows, "chrono", False) or (order and "date" in order.lower() and not getattr(rows, "order_dropped", False)): return "oldest"
+    return "first"
+
+def _aligned(pos, below):
+    return next((x for x in OOM_LADDER if x < below and pos % x == 0), 0)
+
+def _chunk(path, params, start, size, st):
+    """Rows [start, start+size) via pages that start on a page boundary. A server OutOfMemory halves the page size (ladder
+    1000/500/250/100/50) and retries; when nothing smaller is left, raises RMOutOfMemory carrying the rows already read."""
+    es = max(1, min(size, st["max"]))
+    out, pos, end = [], start, start + size
+    while pos < end:
+        if pos % es:
+            es = _aligned(pos, es)
+            if not es: raise RMOutOfMemory(oom_message(path), out)
+        s, h, d = api(path, dict(params, pageSize=es, pageNumber=pos // es + 1))
+        if s == 204: break
+        if is_oom(s, d):
+            st["oom"] = True
+            nxt = _aligned(pos, es)
+            if not nxt: raise RMOutOfMemory(oom_message(path), out)
+            st["max"] = min(st["max"], nxt); es = nxt
+            continue
+        if s != 200: raise ToolError(api_error(s, d))
+        if not isinstance(d, list):
+            st["single"] = d; return []
+        if st["total"] is None and h.get("x-total-results"): st["total"] = int(h["x-total-results"])
+        out += d[: end - pos]
+        if len(d) < es: break
+        pos += es
+    return out
+
+def _pull(path, params, chunks, st, parallel, keep_partial):
+    """Fetch chunks (start, size) in parallel; stop at the first out-of-memory one. -> ([(start, rows)], RMOutOfMemory or None)"""
+    done, err = [], None
+    ex = ThreadPoolExecutor(max(1, min(int(parallel or 4), 8)))
+    try:
+        futs = [ex.submit(_chunk, path, params, s, n, st) for s, n in chunks]
+        for (s, n), f in zip(chunks, futs):
+            try:
+                done.append((s, f.result()))
+            except RMOutOfMemory as e:
+                err = e
+                if keep_partial and e.rows: done.append((s, e.rows))
+                break
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+    return done, err
+
+def fetch(path, params, max_records=500, page_size=0, parallel=4, on_pages=None, newest_col="", partial_ok=False):
+    """Paged GET; parallel pages after the first. Returns (rows, total, pages, status); rows is a Rows (see its attributes).
+    on_pages(n) is called with the page count before the remaining pages are fetched (fan-out guard).
+    newest_col: a date field; when the table holds more than max_records rows, read the LAST pages of the ascending sort by that field
+    so the cap keeps the NEWEST rows. A server OutOfMemory retries with smaller pages; when still failing, raises RMOutOfMemory
+    (carrying rows already read) unless partial_ok, which returns them with rows.partial set."""
+    orig = params
     params = {k: v for k, v in params.items() if v not in (None, "")}
     has_fields = bool(params.get("fields"))
     cap = 20000 if has_fields else 1000
+    max_records = max(1, int(max_records))
     ps = int(page_size) if page_size else min(cap, max(1, max_records))
     ps = min(ps, cap)
-    if max_records > ps and on_pages:
-        # big pull: size it first (1 cheap call) so the fan-out budget is checked BEFORE any heavy page is fetched
-        s0, h0, d0 = api(path, dict(params, pageSize=1, pageNumber=1), timeout=10)
-        if s0 == 204: return [], 0, 1, s0
+    st = {"max": ps, "total": None, "oom": False, "single": None}
+    total = None
+    chrono = path.split("?")[0].rstrip("/").rsplit("/", 1)[-1].lower() in CHRONO_DEFAULT
+    if chrono and params.get("orderingOptions"):
+        params.pop("orderingOptions"); orig["orderingOptions"] = ""   # would only answer 404; the default order is chronological anyway
+    if newest_col or (max_records > ps and on_pages):
+        # big pull: size it first (1 cheap call) so the fan-out budget / the newest slice is decided BEFORE any heavy page is fetched
+        try:
+            s0, h0, d0 = api(path, {k: v for k, v in dict(params, pageSize=1, pageNumber=1).items() if k != "orderingOptions"}, timeout=10)
+        except ToolError as e:
+            if str(e).startswith("Too large to size"):
+                h = report_hint(path)
+                raise ToolError("%s%s" % (e, (" Built-in report that covers this: %s." % h) if h else ""))
+            raise
+        if s0 == 204: return Rows(), 0, 1, s0
+        if is_oom(s0, d0): raise RMOutOfMemory(oom_message(path))
         if s0 != 200: raise ToolError(api_error(s0, d0))
         if isinstance(d0, list) and h0.get("x-total-results"):
-            on_pages(math.ceil(min(int(h0["x-total-results"]), max_records) / ps))
-    first = dict(params, pageSize=ps, pageNumber=1)
-    s, h, d = api(path, first)
-    if s == 204: return [], 0, 1, s
-    if s != 200: raise ToolError(api_error(s, d))
-    if not isinstance(d, list):
-        return d, 1, 1, s
-    total = int(h.get("x-total-results") or len(d))
-    rows = list(d)
+            total = int(h0["x-total-results"])
+            if on_pages and not (newest_col and total > max_records): on_pages(math.ceil(min(total, max_records) / ps))
+    if newest_col and total is not None and total > max_records:   # the NEWEST max_records rows: last pages of the ascending date sort
+        if not chrono and params.get("orderingOptions") != newest_col:
+            params["orderingOptions"] = orig["orderingOptions"] = newest_col
+        start0 = total - max_records
+        first = (start0 // ps) * ps
+        chunks = [(x, ps) for x in range(((total - 1) // ps) * ps, first - 1, -ps)]   # newest page first
+        if on_pages: on_pages(len(chunks))
+        done, err = _pull(path, params, chunks, st, parallel, keep_partial=False)   # a half page would leave a hole: keep whole pages only
+        done.sort(key=lambda x: x[0])
+        rows = Rows()
+        for _, r in done: rows += r
+        if done and done[0][0] < start0: del rows[: start0 - done[0][0]]
+        rows.newest = True
+        rows.chrono = chrono
+        if err:
+            if not rows or not partial_ok:
+                err.rows = list(rows); raise err
+            rows.partial = str(err)
+        return rows, total, len(done), 200
+    try:
+        rows0 = _chunk(path, params, 0, ps, st)
+    except RMOutOfMemory as e:
+        if not (e.rows and partial_ok): raise
+        r0 = Rows(e.rows); r0.partial = str(e)
+        return r0, st["total"] or len(e.rows), 1, 200
+    if st["single"] is not None: return st["single"], 1, 1, 200
+    if not rows0 and not st["total"]: return Rows(), 0, 1, 204
+    total = st["total"] if st["total"] is not None else (total if total is not None else len(rows0))
+    rows = Rows(rows0)
     want = min(total, max_records)
     pages = math.ceil(want / ps)
     if on_pages: on_pages(pages)
-    if pages > 1 and len(d) >= ps:
-        def page(n):
-            s2, h2, d2 = api(path, dict(params, pageSize=ps, pageNumber=n))
-            if s2 == 204: return []
-            if s2 != 200: raise ToolError(api_error(s2, d2))
-            return d2
-        with ThreadPoolExecutor(max(1, min(int(parallel or 4), 8))) as ex:
-            for chunk in ex.map(page, range(2, pages + 1)):
-                rows += chunk
-    return rows[:max_records], total, pages, s
+    if pages > 1 and len(rows0) >= ps:
+        done, err = _pull(path, params, [(x * ps, ps) for x in range(1, pages)], st, parallel, keep_partial=True)
+        for _, r in done: rows += r
+        if err:
+            if not partial_ok:
+                err.rows = list(rows); raise err
+            rows.partial = str(err)
+    del rows[max_records:]
+    rows.chrono = chrono
+    return rows, total, pages, 200
 
-def fetch_ordered(path, params, max_records=500, page_size=0, parallel=4, on_pages=None):
+def fetch_ordered(path, params, max_records=500, page_size=0, parallel=4, on_pages=None, newest_col="", partial_ok=False):
     """fetch(); if the API rejects orderingOptions for this resource (404 KeyNotFound), retry unsorted.
     Clears params['orderingOptions'] so the caller sorts locally."""
     try:
-        return fetch(path, params, max_records, page_size, parallel, on_pages)
+        return fetch(path, params, max_records, page_size, parallel, on_pages, newest_col, partial_ok)
     except ToolError as e:
         if params.get("orderingOptions") and "given key was not present" in str(e):
             params["orderingOptions"] = ""
-            return fetch(path, params, max_records, page_size, parallel, on_pages)
+            rows, total, pages, s = fetch(path, params, max_records, page_size, parallel, on_pages, "", partial_ok)
+            if isinstance(rows, Rows): rows.order_dropped = True
+            return rows, total, pages, s
         if "given key was not present" in str(e):
             raise ToolError("%s | %s" % (e, diagnose_key_error(path, params)))
         raise
@@ -999,7 +1165,7 @@ def scope_from_filters(filters):
 def t_search_models(query, limit=8):
     i = idx()
     hits = SI.search(query, limit=int(limit))
-    lines = concept_lines(query)
+    lines = concept_lines(query) + suggestion_lines(query)
     recs = recipe_search(query)[:3]
     if recs: lines.append("Recipes (fastest, try first): " + ", ".join(r["name"] for _, r in recs))
     reps = SI.search(query, "reports", limit=4)
@@ -1203,6 +1369,10 @@ def tenant_statuses(ids, max_calls=25):
         return None
     return out
 
+def _model_date_fields(model):
+    mi = SI.model_info(model) if model else None
+    return [n for n in ((mi or {}).get("fields") or {}) if str(n).lower().endswith("date") and "." not in str(n)]
+
 def _date_col(fl, orderby=""):
     """Column to order newest-first: the orderby field if it is a date, else the first *Date field requested."""
     cols = [x for x in (fl or "").split(",") if x]
@@ -1210,7 +1380,7 @@ def _date_col(fl, orderby=""):
     if ob and "date" in ob.lower(): return ob
     for pref in ("TransactionDate", "MoveOutDate", "PostDate", "FromDate", "StartDate"):
         if pref in cols: return pref
-    return next((c for c in cols if "date" in c.lower()), "")
+    return next((c for c in cols if c.lower().endswith("date")), "")
 
 _NESTED_HIST = {"tenant.tenantid": "Tenants", "unit.unitid": "Units", "owner.ownerid": "Owners", "vendor.vendorid": "Vendors",
                 "property.propertyid": "Properties", "servicemanagerissue.servicemanagerissueid": "ServiceManagerIssues"}
@@ -1253,7 +1423,7 @@ def t_query(resource, filters="", **kw):
                     % (len(ids), parent)) + "\n----\n".join(outs)
     return _query_one(resource, filters, **kw)
 
-def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size=0, max_records=500, parallel=4,
+def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size=0, max_records=0, parallel=4,
             columns="", group_by="", sum="", sort="", top=0, where="", show=SHOW_ROWS, save_as="", allow_fanout=False,
             most_recent_first=False, first_per="", summary="", as_of="", _scope=None):
     t0 = time.time()
@@ -1268,6 +1438,7 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
     if r.get("sub_all") and not filters:
         raise ToolError("%s across ALL records is very slow and can fail. Add filters (e.g. PropertyID,eq,N or a date range) or use %s/{id}/%s." % (r["path"], r["ctrl"], r["sub"]))
     summary = str(summary or "").strip().lower()
+    hard_limit = False   # summaries need every source row (small tables): read up to RM_MAX_ROWS_HARD, not RM_MAX_ROWS
     if summary and summary not in ("rent", "ledger"):
         raise ToolError("summary must be 'rent' (on RecurringCharges: tenant + subsidy portions and total per tenant) or 'ledger' (on Tenants/{id}/Transactions: last rent charge, last payment, balance).")
     if summary == "rent":
@@ -1275,17 +1446,17 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
             raise ToolError("summary='rent' works on RecurringCharges, e.g. query(resource='RecurringCharges', filters='UnitID,in,(1,2,3)', summary='rent').")
         fields, embeds = "EntityKeyID,EntityType,UnitID,Amount,FromDate,ToDate,ChargeType.Name,ChargeType.Description", "ChargeType"
         if "EntityType" not in (filters or ""): filters = (filters + ";" if filters else "") + "EntityType,eq,Tenant"
-        max_records = max(int(max_records or 500), 20000)   # a property-wide summary must never be silently cut at 500
+        hard_limit = True   # a property-wide summary must never be silently cut short
     elif summary == "ledger":
         if r["model"] != "Transaction":
             raise ToolError("summary='ledger' works on one tenant's ledger: query(resource='Tenants/{id}/Transactions', summary='ledger').")
         fields, embeds = "TransactionDate,TransactionType,Description,Amount,SubsidyID,UnitID", ""
-        max_records = max(int(max_records or 500), 20000)
+        hard_limit = True
     fl, em, flt, (lsort, order), probs = validate(r["model"], fields, embeds, filters, orderby)
     if probs:
         raise ToolError("Nothing was run. Fix these and retry:\n- " + "\n- ".join(probs))
     params = {"fields": fl, "embeds": em, "filters": flt, "orderingOptions": order}
-    max_records = int(max_records or 500)
+    max_records = row_limit(max_records, hard_limit)
     mrf_col = ""
     mrf_ignored = ""
     if most_recent_first and not summary and (sort or group_by or lsort):
@@ -1295,16 +1466,25 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
         mrf_col = _date_col(fl, orderby)
         if not mrf_col: raise ToolError("most_recent_first needs a date column: add one to fields (e.g. TransactionDate) or pass orderby='-TransactionDate'.")
         if mrf_col not in [x for x in fl.split(",") if x]: fl = params["fields"] = (fl + "," if fl else "") + mrf_col
-        max_records = max(max_records, 20000)   # fetch everything, cut locally AFTER sorting so the newest rows are not the ones dropped (unless > 20000 rows exist: noted below)
+    # newest rows win the cap: when more rows exist than the cap, read the LAST pages of the ascending date sort (unless the user asked
+    # for another order, an aggregate or oldest-first)
+    newest_col = ""
+    if not summary and not first_per and not (sort or group_by):
+        if lsort and "date" in lsort.lower() and not order:   # orderby='-SomeDate': the user wants the newest first
+            newest_col = lsort.lstrip("-")
+        elif not lsort and (not order or order == mrf_col):
+            newest_col = mrf_col or ("" if order else _date_col(fl or ",".join(_model_date_fields(r.get("model"))), ""))
+        if newest_col and fl and newest_col not in [x for x in fl.split(",") if x]: newest_col = ""
     try:
         rows, total, pages, s = fetch_ordered(r["path"], params, max_records, page_size, parallel,
-                                              on_pages=lambda n: check_fanout({}, n, allow_fanout))
+                                              on_pages=lambda n: check_fanout({}, n, allow_fanout), newest_col=newest_col, partial_ok=True)
     except ToolError as e:
         q = (concepts().get("filter_quirks") or {}).get(r["ctrl"]) or (concepts().get("filter_quirks") or {}).get(r.get("sub") or "")
         if "Unable to locate target property" in str(e) and q: raise ToolError("%s | Filter note: %s" % (e, q))
         raise
     if order and not params.get("orderingOptions"): sort = sort or order  # API could not sort this resource
     raw = rows
+    rows_obj = rows
     if isinstance(rows, dict) or not isinstance(rows, list):
         rows = [rows] if isinstance(rows, dict) else [{"value": rows}]
     nrec = len(rows)
@@ -1316,8 +1496,16 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
     if lsort: sort = sort or lsort
     pre_notes = [mrf_ignored] if mrf_ignored else []
     if pre_explode: pre_notes.append(pre_explode)
-    if mrf_col and total > nrec:
-        pre_notes.append("CAPPED: most_recent_first read the OLDEST %d of %d rows (API cannot sort descending), so the NEWEST rows are missing; add filters (property/date) to get them" % (nrec, total))
+    lead = ""
+    got_newest = bool(getattr(rows_obj, "newest", False))
+    if got_newest and not mrf_col and newest_col and flat and newest_col in flat[0]: mrf_col = newest_col   # the newest slice is shown newest first
+    if getattr(rows_obj, "partial", ""):
+        lead = "PARTIAL: only the first %d of %s rows were read before Rent Manager stopped. %s\n" % (nrec, total if total >= nrec else "an unknown number of", rows_obj.partial)
+    elif total > nrec:
+        kind = cap_kind(rows_obj, order)
+        lead = cap_line(nrec, total, kind, r["path"], max_records) + "\n"
+        if kind == "first" and (mrf_col or lsort or newest_col):
+            pre_notes.append("the newest rows could not be selected (the API cannot sort this resource); add filters (property/date) to reach them")
     if summary:
         sinfo = {}
         if summary == "rent":
@@ -1339,13 +1527,12 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
         shown, tot, notes = post_process(flat, columns, None, group_by, sum, sort, top, where, first_per=first_per or None,
                                          newest_first=mrf_col if (mrf_col and not sort and not group_by) else None)
         jp, cp = save(save_as or r["path"].strip("/").replace("/", "_"), raw, flat)
-    if (first_per or lsort) and not mrf_col and not summary and total > nrec:
+    if (first_per or lsort) and not mrf_col and not summary and total > nrec and not got_newest:
         pre_notes.append("INCOMPLETE: %s applied to only %d of %d rows (max_records cap): raise max_records or add filters" % ("first_per" if first_per else "descending sort", nrec, total))
     notes = pre_notes + notes
     scope = _scope or scope_from_filters(flt) or ("record %s" % r["id"] if r["id"] else all_scope_label())
-    head = "%s: %d of %d record(s)%s%s. Scope: %s" % (
-        r["path"], nrec, total, " (CAPPED at max_records=%d; raise it to get all)" % max_records if total > nrec else "",
-        "; " + "; ".join(notes) if notes else "", scope)
+    head = "%s: %d of %d record(s)%s. Scope: %s" % (
+        r["path"], nrec, total, "; " + "; ".join(notes) if notes else "", scope)
     if r.get("status") == 204 and not flat:
         head += "\nNote: this resource returned no rows at index time too; the API user may lack the privilege or property access."
     hint = "" if fl or group_by or columns or len(flat) == 0 or summary else "\nTip: pass fields='A,B,C' to limit columns (faster, larger pages)."
@@ -1356,7 +1543,7 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
         dc = _date_col(fl, orderby)
         more = "\n(showing %d of %d rows%s)" % (nshow, len(shown), "" if mrf_col or not dc or sort or summary else
                                                "; these are the OLDEST rows by %s, the newest are cut: add most_recent_first=true or top=N with sort='-%s'; full data in the saved file" % (dc, dc))
-    return clip("%s\n%s%s\n%s\n(%.1fs, %d page(s), live)%s" % (head, body, more, file_lines(jp, cp), time.time() - t0, pages, hint))
+    return clip("%s%s\n%s%s\n%s\n(%.1fs, %d page(s), live)%s" % (lead, head, body, more, file_lines(jp, cp), time.time() - t0, pages, hint))
 
 # ----------------------------------------------------------------------------- reports
 def report_by(id_or_name):
@@ -1452,6 +1639,9 @@ def run_report_raw(rep, params):
     q = ";".join("%s,%s" % (k, v) for k, v in params.items() if v not in (None, ""))
     s, h, d = api("/Reports/%s/RunReport" % rep["id"], {"parameters": q} if q else None)
     if s == 204: return {}, q
+    if is_oom(s, d):
+        raise ToolError(OOM_PREFIX + "For report %s (id %s): pass property= (PropOwnerIDs / PropertyIDs) for fewer properties, a shorter date range (StartDate/EndDate), "
+                        "or run it one property at a time and combine the results. Other built-in reports for the same data: use list_reports." % (rep["name"], rep["id"]))
     if s != 200: raise ToolError("Report failed: " + api_error(s, d))
     if isinstance(d, str):
         try: d = json.loads(d)
@@ -1693,7 +1883,7 @@ def flatten_recipe_args(args):
     r = recs.get(_recipe_key(args.get("name", "")))
     if not r: return args
     args["name"] = r["name"]
-    spec = {k.lower() for k in recipe_spec(r)}
+    spec = {k.lower() for k in recipe_spec(r)} | {a.lower() for ps in recipe_spec(r).values() for a in ps.get("aliases", [])}
     if has_period(r.get("params") or {}): spec.add("period")
     params = args.get("params")
     if isinstance(params, str):
@@ -1748,7 +1938,7 @@ def t_find_recipe(query, limit=3):
         return ("PDF requested: use report_pdf(report=%s, properties='name1, name2'): one PDF file per property in out/ "
                 "(add parameters='Key,Value;...' for report options; report_info(%s) lists them)." % (rid, rid))
     hits = recipe_search(query)[: int(limit)]
-    cl = concept_lines(query)
+    cl = concept_lines(query) + suggestion_lines(query)
     if not hits:
         names = ", ".join(r["name"] for r in load_recipes())
         return "\n".join(cl + ["No recipe matches '%s'. Available: %s\nOtherwise use search_models / list_reports." % (query, names)])
@@ -1854,6 +2044,19 @@ def compute_facts(recipe, rows, vals, scope=None):
     if scope: facts["scope"] = scope
     return facts
 
+def tenant_terms(v):
+    """tenant param -> list of names/ids: a list, a JSON list, or ONE name; several names in a string are separated by ';' (a ',' is part of 'Last, First')."""
+    if isinstance(v, (list, tuple)): items = list(v)
+    else:
+        t = str(v).strip()
+        if t.startswith("["):
+            try: items = json.loads(t)
+            except ValueError: items = [t]
+        else: items = t.split(";")
+    items = [str(x).strip() for x in items if str(x).strip()]
+    if not items: raise ToolError("tenant is empty: give a tenant name or TenantID (several: a list).")
+    return items
+
 def resolve_tenant(term, property_ids=None):
     term = str(term).strip()
     if term.isdigit(): return int(term), "Tenant ID %s" % term
@@ -1919,7 +2122,7 @@ def run_recipe_result(name, params=None, all_properties=False, show=SHOW_ROWS):
         typ = p.get("type", "str")
         if v is None and "default" not in p:
             raise ToolError("Missing required param '%s': %s. e.g. run_recipe(name='%s', params={'%s': ...})" % (pname, p.get("description", ""), name, pname))
-        if typ == "date": v = parse_date(v, end=pname.lower() in ("end", "end_date", "to")) if v not in (None, "") else ""
+        if typ == "date": v = parse_date(v, end=pname.lower() in ("end", "end_date", "to", "until")) if v not in (None, "") else ""
         elif typ == "int": v = "" if v in (None, "") else int(_param_num(v, pname, name)) + int(p.get("offset", 0))
         elif typ == "number": v = "" if v in (None, "") else round(_param_num(v, pname, name) + float(p.get("offset", 0)), 2)
         elif typ == "basis": v, basis_label = parse_basis(v)
@@ -1930,8 +2133,14 @@ def run_recipe_result(name, params=None, all_properties=False, show=SHOW_ROWS):
             v = ",".join(str(x) for x in prop_ids)
             if pl: scope = pl + ("; " + scope if scope else "")
         elif typ == "tenant":
-            v, tl = resolve_tenant(v, prop_ids)
-            scope = (scope + "; " if scope else "") + tl
+            ids_, tls = [], []
+            for term in tenant_terms(v):
+                i_, tl_ = resolve_tenant(term, prop_ids)
+                if i_ not in ids_: ids_.append(i_); tls.append(tl_)
+            if len(ids_) > 1 and not r.get("multi_tenant"): raise ToolError("%s takes one tenant per call." % name)
+            v = ids_[0]
+            vals["_tenants"] = [(i_, re.sub(r"^Tenant:? ?", "", t_)) for i_, t_ in zip(ids_, tls)]
+            scope = (scope + "; " if scope else "") + "; ".join(tls)
         vals[pname] = v
     vals["as_of_is_today"] = "True" if vals.get("as_of") in (None, "", _today().isoformat()) else "False"
     if not scope:
@@ -1968,19 +2177,24 @@ def run_recipe_result(name, params=None, all_properties=False, show=SHOW_ROWS):
         qd = req["query"]
         flt = [_fill(c, vals) for c in qd.get("filters", [])]
         flt = ";".join(c for c in flt if c)
-        res = _query_renamed(qd, vals, flt, post, name, scope, common, opts)
+        if r.get("multi_tenant"):
+            res = _ledger_recipe(r, vals, flt, post, name, scope, common, opts)
+        else:
+            res = _query_renamed(qd, vals, flt, post, name, scope, common, opts)
     facts, headline = {}, ""
     if r.get("reconcile") and opts.get("rows") is not None:
         try: res += reconcile_recipes(r["reconcile"], vals, opts["rows"])
         except ToolError as e: res += "\n(reconciliation not available: %s)" % e
     if "rows" in opts:
-        facts = compute_facts(r, opts["rows"], vals, scope)
+        facts = opts.get("facts") or compute_facts(r, opts["rows"], vals, scope)
         try:
-            if r.get("headline"): headline = render_headline(r["headline"], opts["rows"], vals, facts)
+            if opts.get("headline"): headline = opts["headline"]
+            elif r.get("headline"): headline = render_headline(r["headline"], opts["rows"], vals, facts)
         except ToolError as e:
             res += "\n(headline not available: %s)" % e
     text = "Recipe %s. %s%s\n%s\n(total %.1fs)" % (name, r.get("answer_hint", ""), ("\n" + warn) if warn else "", res, time.time() - t0)
     if headline: text = "Answer: %s\n%s" % (headline, text)
+    if opts.get("cap"): text = "\n".join(opts["cap"]) + "\n" + text   # CAPPED / PARTIAL lines come FIRST
     return {"text": text, "headline": headline, "facts": facts, "scope": scope, "rows": opts.get("rows")}
 
 def reconcile_recipes(rec, vals, rows):
@@ -2041,7 +2255,7 @@ def run_bundle(r, vals, show, t0):
         if not x["ok"]: out.append("FAILED part [%s]: %s" % (x["label"], x["error"]))
         elif x["headline"]: out.append("Answer [%s]: %s" % (x["label"], x["headline"]))
     for x in results:
-        body = re.sub(r"\AAnswer: [^\n]*\n", "", x["text"])
+        body = re.sub(r"^Answer: [^\n]*\n", "", x["text"], count=1, flags=re.M)
         out.append("\n=== %s (%.1fs) ===\n%s" % (x["label"], x["secs"], body))
     out.append("(bundle total %.1fs)" % (time.time() - t0))
     text = "\n".join(out)
@@ -2074,7 +2288,7 @@ def _also_rows(r, qd, al, vals, have):
     emb = ",".join(x for x in [qd.get("embeds", ""), keep] if x)
     fl, em, flt, _s, probs = validate(r["model"], flds, emb, aflt, "")
     if probs: raise ToolError("Recipe also query invalid (fix recipe file): " + "; ".join(probs))
-    rows, _t, _p, _st = fetch_ordered(r["path"], {"fields": fl, "embeds": em, "filters": flt, "orderingOptions": ""}, qd.get("max_records", 20000))
+    rows, _t, _p, _st = fetch_ordered(r["path"], {"fields": fl, "embeds": em, "filters": flt, "orderingOptions": ""}, _rec_limit(qd))
     if isinstance(rows, dict): rows = [rows]
     seen = {str(x.get(keyf)) for x in have}
     out = []
@@ -2086,16 +2300,34 @@ def _also_rows(r, qd, al, vals, have):
         out.append(f)
     return out
 
-def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None):
-    """Query + rename columns (recipes use this to give friendly column names like status_flag)."""
+def _rec_limit(qd, vals=None):
+    """Row limit of a recipe query: its max_records (a number or a '{param}' template), clamped to RM_MAX_ROWS_HARD."""
+    mr = qd.get("max_records", MAX_ROWS_HARD)
+    if isinstance(mr, str): mr = _fill(mr, vals or {})
+    try: return row_limit(int(mr))
+    except (TypeError, ValueError): return MAX_ROWS_HARD
+
+def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None, ext=None):
+    """Query + rename columns (recipes use this to give friendly column names like status_flag).
+    ext (a dict): collect the processed rows and cap information in it and return "" (no file, no text): used by multi-tenant recipes."""
     t0 = time.time()
     r = find_resource(_fill(qd["resource"], vals))
     fl, em, flt2, (lsort, order), probs = validate(r["model"], qd.get("fields", ""), qd.get("embeds", ""), flt, qd.get("orderby", ""))
     if probs: raise ToolError("Recipe query invalid (fix recipe file):\n- " + "\n- ".join(probs))
     prm = {"fields": fl, "embeds": em, "filters": flt2, "orderingOptions": order}
-    rows, total, pages, s = fetch_ordered(r["path"], prm, qd.get("max_records", 20000))
+    limit = _rec_limit(qd, vals)
+    nc = post.get("newest_first") if (post.get("newest_first") and order == post.get("newest_first")) else ""   # keep the NEWEST rows under the cap
+    rows, total, pages, s = fetch_ordered(r["path"], prm, limit, newest_col=nc, partial_ok=True)
     if order and not prm.get("orderingOptions") and not common["sort"]: lsort = order
+    rows_obj = rows
     if isinstance(rows, dict): rows = [rows]
+    capline = ""
+    if getattr(rows_obj, "partial", ""):
+        capline = "PARTIAL: only the first %d of %s rows were read before Rent Manager stopped. %s" % (len(rows), total if total >= len(rows) else "an unknown number of", rows_obj.partial)
+    elif isinstance(rows_obj, list) and total > len(rows):
+        kind = cap_kind(rows_obj, order)
+        capline = cap_line(len(rows), total, kind, r["path"], limit)
+    if capline and opts is not None: opts.setdefault("cap", []).append(capline)
     flat = [flatten(x) for x in rows]
     for f in flat:
         for k in [x for x in fl.split(",") if x] + list(post.get("rename") or {}):
@@ -2131,14 +2363,14 @@ def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None):
         mflt = ";".join(c for c in (_fill(x, vals) for x in mk.get("filters", [])) if c)
         _f, _e, mflt2, (_s, _o), mprobs = validate(r["model"], mk["key"], "", mflt, "")
         if mprobs: raise ToolError("Recipe mark query invalid (fix recipe file):\n- " + "\n- ".join(mprobs))
-        mrows, _t, _p, _s2 = fetch_ordered(r["path"], {"fields": _f, "embeds": "", "filters": mflt2, "orderingOptions": ""}, qd.get("max_records", 20000))
+        mrows, _t, _p, _s2 = fetch_ordered(r["path"], {"fields": _f, "embeds": "", "filters": mflt2, "orderingOptions": ""}, _rec_limit(qd))
         if isinstance(mrows, dict): mrows = [mrows]
         hit = {str(x.get(mk["key"])) for x in (mrows or [])}
         if mk.get("also") and str(vals.get("as_of_is_today")) == "True":
-            hit |= {str(x.get(mk["key"])) for x in _also_rows(r, {"fields": mk["key"], "max_records": qd.get("max_records", 20000)}, mk["also"], vals, [])}
+            hit |= {str(x.get(mk["key"])) for x in _also_rows(r, {"fields": mk["key"], "max_records": _rec_limit(qd)}, mk["also"], vals, [])}
         elif mk.get("also"):
             try:
-                extra = len(_also_rows(r, {"fields": mk["key"], "max_records": qd.get("max_records", 20000)}, mk["also"], vals, []))
+                extra = len(_also_rows(r, {"fields": mk["key"], "max_records": _rec_limit(qd)}, mk["also"], vals, []))
                 diff = "today's definition would add %d reserved/held unit(s) that are physically vacant NOW" % extra
             except ToolError:
                 diff = "the difference to today's definition could not be computed"
@@ -2159,11 +2391,104 @@ def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None):
     if opts is not None:
         opts["rows"] = shown
         if opts.get("no_total"): tot = None
+    if ext is not None:
+        ext.update(shown=shown, flat=flat, raw=list(rows), total=total, nrec=len(flat), path=r["path"], capline=capline, notes=notes,
+                   newest=bool(getattr(rows_obj, "newest", False)), partial=bool(getattr(rows_obj, "partial", "")), pages=pages)
+        return ""
     jp, cp = save(name, rows, renamed)
     head = "%s: %d of %d record(s)%s. Scope: %s" % (r["path"], len(flat), total, "; " + "; ".join(notes) if notes else "", scope)
     body = table(shown, int(common["show"] or SHOW_ROWS), tot)
     more = "" if len(shown) <= int(common["show"] or SHOW_ROWS) else "\n(showing %d of %d rows)" % (int(common["show"] or SHOW_ROWS), len(shown))
     return clip("%s\n%s%s\n%s\n(%.1fs, %d page(s), live)" % (head, body, more, file_lines(jp, cp), time.time() - t0, pages))
+
+def _tenant_balance(tid):
+    """The ledger's own current balance (Tenants/{id} Balance); None when it cannot be read."""
+    try:
+        st_, h_, d_ = api("/Tenants/%d" % int(tid), {"fields": "TenantID,Balance", "embeds": "Balance"}, timeout=20)
+        if st_ == 200 and isinstance(d_, dict) and d_.get("Balance") is not None: return float(d_["Balance"])
+    except (ToolError, ValueError, TypeError):
+        pass
+    return None
+
+def _amount_sum(path, flt):
+    """Sum of Amount over a filtered ledger slice (Amount only, one call); None when too large or failing."""
+    try:
+        st_, h_, d_ = api(path, {"fields": "Amount", "filters": flt, "pageSize": 20000}, timeout=30)
+    except ToolError:
+        return None
+    if st_ == 204: return 0.0
+    if st_ != 200 or not isinstance(d_, list) or int(h_.get("x-total-results") or len(d_)) > len(d_): return None
+    return round(sum(_num(x.get("Amount")) or 0.0 for x in d_), 2)
+
+def ledger_opening(tid, path, ext, since, until):
+    """Opening balance = what the ledger held before the first listed row, so RunningBalance is the ledger's OWN balance even when older rows
+    are not listed (cap, since). None when it cannot be determined. Newest slice: current balance - rows after 'until' - listed rows."""
+    capped = ext["total"] > ext["nrec"]
+    if not (capped or since or until): return 0.0
+    listed = round(sum(_num(f.get("Amount")) or 0.0 for f in ext["flat"]), 2)
+    if ext["newest"] or not capped:
+        bal = _tenant_balance(tid)
+        after = _amount_sum(path, "TransactionDate,gt,%s" % until) if until else 0.0
+        return None if bal is None or after is None else round(bal - after - listed, 2)
+    before = _amount_sum(path, "TransactionDate,lt,%s" % since) if since else 0.0   # oldest slice: everything before the window
+    return before
+
+def _ledger_recipe(r, vals, flt, post, name, scope, common, opts):
+    """tenant_ledger for one or several tenants: one call per tenant (parallel, at most 4, inside the fan-out budget), newest rows win the
+    cap, RunningBalance is the ledger's own running balance (older rows that are not listed are included in it)."""
+    t0 = time.time()
+    qd = r["request"]["query"]
+    tenants = vals.get("_tenants") or [(vals.get("tenant"), "Tenant ID %s" % vals.get("tenant"))]
+    if len(tenants) > 25:
+        raise ToolError("At most 25 tenants per call (got %d). For a whole property use one built-in report instead: %s" % (len(tenants), report_hint("Transactions")))
+    for tid, _l in tenants: check_fanout({"ctrl": "Tenants", "id": str(tid)}, 0, False)
+    limit = row_limit(vals.get("max_rows") or 1000)
+    since, until = vals.get("since") or "", vals.get("until") or ""
+    qd1 = dict(qd, max_records=limit)
+    multi = len(tenants) > 1
+    def one(t):
+        ext = {}
+        o2 = {}
+        _query_renamed(qd1, dict(vals, tenant=t[0]), flt, post, name, scope, common, o2, ext)
+        ext["cap"] = o2.get("cap") or []
+        ext["open"] = ledger_opening(t[0], "/Tenants/%d/Transactions" % int(t[0]), ext, since, until) if ext.get("flat") is not None and ext.get("total") else 0.0
+        return ext
+    with ThreadPoolExecutor(max(1, min(4, len(tenants)))) as ex:
+        exts = list(ex.map(one, tenants))
+    shown, raw, caps, ends, total_all, nrec_all, unknown = [], [], [], [], 0, 0, []
+    for (tid, label), e in zip(tenants, exts):
+        if not e.get("shown") and not e.get("total"):
+            ends.append((label, 0.0)); continue
+        op = e["open"]
+        if op is None: unknown.append(label)
+        base = op or 0.0
+        for row in e["shown"]:
+            if "RunningBalance" in row and row["RunningBalance"] is not None: row["RunningBalance"] = round(row["RunningBalance"] + base, 2)
+            shown.append(dict({"Tenant": label}, **row) if multi else row)
+        lst = round(sum(_num(f.get("Amount")) or 0.0 for f in e["flat"]), 2)
+        ends.append((label, round(base + lst, 2)))
+        raw += e["raw"]; total_all += e["total"]; nrec_all += e["nrec"]
+        for c in e["cap"]:
+            caps.append(("%s: " % label if multi else "") + c)
+        if e["cap"] and e["total"] > e["nrec"] and not e["partial"]:
+            caps[-1] += (" The running balance shown is the ledger's own (opening balance %s of the older rows included); the older rows are not listed." % ("%.2f" % op if op is not None else "unavailable"))
+    if unknown: caps.append("Opening balance could not be read for %s: RunningBalance there starts at 0 at the oldest row shown." % ", ".join(unknown))
+    for c in caps: opts.setdefault("cap", []).append(c)
+    opts["rows"] = shown
+    if multi:
+        opts["headline"] = "%d ledger transactions for %d tenants (newest first within each tenant); ending balance per tenant: %s." % (
+            len(shown), len(tenants), "; ".join("%s %s" % (l, _money(b)) for l, b in ends))
+        opts["facts"] = {"transactions": len(shown), "tenants": len(tenants), "ending_balances": {l: b for l, b in ends}, "scope": scope}
+    elif ends:
+        opts["facts"] = {"transactions": len(shown), "ending_balance": ends[0][1], "scope": scope}
+        opts["headline"] = "%d ledger transactions (newest first unless oldest_first); ending running balance %s." % (len(shown), _money(ends[0][1]))
+    if not shown and not raw:
+        return "(no ledger rows for these tenants%s)\nScope: %s" % (" in that date range" if (since or until) else "", scope)
+    jp, cp = save(name, raw, shown)
+    head = "Tenants/{id}/Transactions: %d of %d record(s) for %d tenant(s). Scope: %s" % (nrec_all, total_all, len(tenants), scope)
+    nshow = int(common["show"] or SHOW_ROWS)
+    more = "" if len(shown) <= nshow else "\n(showing %d of %d rows; full data in the saved file)" % (nshow, len(shown))
+    return clip("%s\n%s%s\n%s\n(%.1fs, live)" % (head, table(shown, nshow, None), more, file_lines(jp, cp), time.time() - t0))
 
 # ----------------------------------------------------------------------------- resolve
 def t_resolve(term="", kind="property", property=""):
@@ -2733,7 +3058,7 @@ TOOLS = [
     ("query", "Rent Manager: live read-only query of one resource (tenants, units, leases, rent, transactions...) with validated filters/fields/embeds; can group/sum locally. BATCH ids in one call: UnitID,in,(1,2,3), never one call per unit/tenant. Saves JSON+CSV to out/.",
      dict({"resource": S("Units | Tenants/123/Transactions | Tenants/123"), "filters": S("Field,op,value;... ops eq ne gt ge lt le in ni ct sw ew bt"),
            "fields": S("Comma list; dotted for embedded (Property.Name) - embeds are added automatically"),
-           "embeds": S("Comma list of embeds"), "orderby": S("Field or -Field"), "max_records": I("Max rows to fetch (default 500, up to 100000)"),
+           "embeds": S("Comma list of embeds"), "orderby": S("Field or -Field"), "max_records": I("Max rows (default 5000 = RM_MAX_ROWS; up to 20000). Newest rows are kept; a CAPPED line says what is missing"),
            "page_size": I("Optional page size"), "parallel": I("Parallel page requests (default 4)"), "save_as": S("Output file base name"),
            "allow_fanout": B("Only if the user insists: lift the per-record call budget (prefer a report or one bulk query)"),
            "most_recent_first": B("Newest rows first by the date column (keeps the NEWEST rows; use for ledgers/leases)"),
