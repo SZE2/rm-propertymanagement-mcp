@@ -1,0 +1,77 @@
+{
+ "name": "aged_receivables",
+ "description": "Aged receivables per tenant: 0-30, 31-60, 61-90, 90+ day buckets (built-in AgedReceivables report).",
+ "use": "AR aging buckets 0-30/31-60/61-90/90+ per tenant",
+ "keywords": [
+  "aged receivables",
+  "aging",
+  "ar aging",
+  "receivables",
+  "30 60 90",
+  "buckets"
+ ],
+ "heavy": true,
+ "chunks": 2,
+ "answer_hint": "Defaults: current tenants only, prospects NOT included, no minimum balance or days-late threshold (so totals exceed the delinquency recipe). For the delinquency view use the delinquency recipe.",
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "tenants": {
+   "type": "str",
+   "default": "Current",
+   "description": "Current, Past or All"
+  },
+  "include_prospects": {
+   "type": "bool",
+   "default": false,
+   "description": "include prospect accounts (report default: no)",
+   "advanced": true
+  },
+  "balance_at_least": {
+   "type": "number",
+   "default": "",
+   "description": "only accounts with a balance >= this amount; empty = all balances",
+   "advanced": true
+  }
+ },
+ "request": {
+  "report": "AgedReceivables",
+  "report_id": 78,
+  "grid": "Grid1",
+  "parameters": {
+   "AsOfDate": "{as_of}",
+   "PropertyIDs": "({property})",
+   "CustomersToInclude": "{tenants}",
+   "IncludeProspects": "{include_prospects}",
+   "CUSTOMERVALUESTOINCLUDETEXT": "{balance_at_least}"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesShortName": "Property",
+   "AccountsName": "Tenant",
+   "SubEntitiesName": "Unit",
+   "LessThan30": "0_30",
+   "LessThan60": "31_60",
+   "LessThan90": "61_90",
+   "GreaterThan90": "over_90",
+   "TotalLeft": "Total"
+  },
+  "group_by": "Property,Tenant,Unit",
+  "sum": "Total,0_30,31_60,61_90,over_90",
+  "sort": "-Total"
+ },
+ "headline": "Total receivable {sum$:Total} across {count} accounts as of {as_of}: 0-30 days {sum$:0_30}, 31-60 {sum$:31_60}, 61-90 {sum$:61_90}, over 90 {sum$:over_90}.",
+ "facts": {
+  "total": "sum:Total",
+  "accounts": "count",
+  "over_90": "sum:over_90"
+ }
+}

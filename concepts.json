@@ -1,0 +1,79 @@
+{
+ "_note": "Generic 'where is the data' map shipped with the repo. Verified live; no company data. words = trigger words (matched against the user's search); on_models = describe_model shows the pointer for these resources.",
+ "concepts": [
+  {
+   "id": "rent",
+   "words": ["rent", "last rent", "asking rent", "monthly rent", "rent amount", "lease rent", "current rent", "recurring charge", "recurring charges", "subsidy", "rental assistance", "section 8", "hap", "voucher", "tenant portion"],
+   "pointer": "Rent is not a field on Leases. Rent = the RECURRING CHARGES set up for the tenant: charge type Rent Charge (RC) plus subsidy types (Rental Assistance RA, HAP, MS8 ...), which are also rent. Show tenant portion + subsidy portion = total. Query RecurringCharges with filters 'UnitID,in,(ids)' or 'EntityKeyID,in,(tenantIds);EntityType,eq,Tenant' and summary='rent' (breakdown per tenant by charge type). Do not read rent from the ledger (Tenants/{id}/Transactions): that only holds what was posted/paid. Asking/market rent: Units embed CurrentMarketRent.Amount, or the Vacancy report.",
+   "on_models": ["Leases", "Tenants", "Units", "RecurringCharges", "Charges"],
+   "resources": ["RecurringCharges", "Leases", "Units"],
+   "recipes": ["rent_roll", "vacancy_report"]
+  },
+  {
+   "id": "last_tenant",
+   "words": ["last tenant", "previous tenant", "former tenant", "prior tenant", "who lived", "last lease"],
+   "pointer": "Leases (UnitID, TenantID, MoveInDate, MoveOutDate). For the last tenant of a unit: query Leases with 'UnitID,in,(ids)', orderby '-MoveOutDate', first_per='UnitID' (one newest lease per unit, ONE call for all units).",
+   "on_models": ["Leases"],
+   "resources": ["Leases"],
+   "recipes": ["tenant_leases", "move_outs"]
+  },
+  {
+   "id": "deposit",
+   "words": ["deposit", "security deposit", "deposits held"],
+   "pointer": "Security deposit held: Tenants embed SecurityDepositHeld (amount, per tenant); built-in reports SecurityDeposit / DepositDetail; deposit postings are ledger rows (Tenants/{id}/Transactions, Description 'Security Deposits'). The Deposits resource is bank deposits (often empty), not tenant deposits.",
+   "on_models": ["Tenants", "Deposits"],
+   "resources": ["Tenants"],
+   "recipes": []
+  },
+  {
+   "id": "balance",
+   "words": ["balance", "owes", "owed", "amount due", "arrears", "past due"],
+   "pointer": "Current balance per tenant: Tenants embed Balance (query Tenants with embeds='Balance'). Delinquency/aged lists: recipes delinquency, aged_receivables. Ledger with running balance: recipe tenant_ledger (newest first).",
+   "on_models": ["Tenants"],
+   "resources": ["Tenants"],
+   "recipes": ["delinquency", "aged_receivables", "tenant_ledger"]
+  },
+  {
+   "id": "move_out",
+   "words": ["move out", "move-out", "moveout", "moved out", "notice", "vacated", "move in", "move-in"],
+   "pointer": "Move dates live on Leases: MoveInDate, MoveOutDate, ExpectedMoveOutDate, NoticeDate (not on Tenants or Units). Recipes move_ins / move_outs cover a date range.",
+   "on_models": ["Leases"],
+   "resources": ["Leases"],
+   "recipes": ["move_outs", "move_ins"]
+  },
+  {
+   "id": "vacancy",
+   "words": ["vacant", "vacancy", "days vacant", "empty unit", "unoccupied"],
+   "pointer": "Vacant = physically vacant: nobody living in the unit today; reserved or held units (prospect reservation, Rent Ready, Const ...) count as vacant and are flagged in status_flag / occupancy_flag. Recipe vacant_units (list) or vacancy_report (days vacant, market rent, same units + UnitID). Units has no IsVacant filter (IsVacant is an embed; the filter is IsVacantAsOf = strict, excludes reserved units).",
+   "on_models": ["Units"],
+   "resources": ["Units"],
+   "recipes": ["vacant_units", "vacancy_report", "occupancy_summary"]
+  },
+  {
+   "id": "work_order",
+   "words": ["work order", "work orders", "service request", "maintenance", "repair request", "service issue"],
+   "pointer": "Work orders / service requests = ServiceManagerIssues (resource) with ServiceManagerIssueWorkOrders for the work-order detail; built-in reports ServiceOrderList and IssueList.",
+   "on_models": ["ServiceManagerIssues"],
+   "resources": ["ServiceManagerIssues", "ServiceManagerIssueWorkOrders"],
+   "recipes": []
+  },
+  {
+   "id": "ledger",
+   "words": ["ledger", "transactions", "payments", "paid", "charges posted", "last payment"],
+   "pointer": "Ledger = Tenants/{id}/Transactions (TransactionDate, TransactionType Charge/Payment/Credit, Description, Amount; only 7 filters). It is the posted/paid history, oldest first by default: pass most_recent_first=true (or summary='ledger') so the newest rows are not cut. Many tenants: do NOT loop; recipes payments_received / charges_by_type, or Charges/Payments with PropertyID and date filters.",
+   "on_models": ["Transactions", "Charges", "Payments"],
+   "resources": ["Charges", "Payments"],
+   "recipes": ["tenant_ledger", "payments_received", "charges_by_type"]
+  }
+ ],
+ "field_aliases": {
+  "UnitNumber": "Name", "UnitName": "Name", "UnitNo": "Name", "TenantName": "Name", "PropertyName": "Property.Name",
+  "MoveOut": "MoveOutDate", "MoveIn": "MoveInDate", "ChargeType": "ChargeType.Name (embed ChargeType)",
+  "Rent": "not a field: see search_models('rent') (recurring charges)", "IsVacant": "IsVacantAsOf (filter); IsVacant is an embed only"
+ },
+ "filter_quirks": {
+  "RecurringCharges": "Spec lists PropertyID and TenantID as filters but the live API fails on them (HTTP 500). Use UnitID, EntityKeyID (tenant id; add EntityType,eq,Tenant), Unit.PropertyID, ChargeType.Name. A ToDate filter drops open-ended charges (ToDate empty), so never filter ToDate when looking for current rent.",
+  "Transactions": "Only AccountID, Amount, Comment, Description, MasterPaymentID, Reference, TransactionDate are filterable. TransactionType is not: use local where='TransactionType,eq,Charge'.",
+  "Units": "IsVacant is an embed, not a filter. Use IsVacantAsOf,eq,date (strict) or the recipes."
+ }
+}

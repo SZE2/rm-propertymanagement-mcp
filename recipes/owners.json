@@ -1,0 +1,24 @@
+{
+ "name": "owners",
+ "description": "List of owners (investors/entities) with status.",
+ "catalog": false,
+ "keywords": [
+  "owners",
+  "owner list",
+  "investors",
+  "entities",
+  "who owns"
+ ],
+ "heavy": false,
+ "params": {},
+ "request": {
+  "query": {
+   "resource": "Owners",
+   "fields": "OwnerID,Name,DisplayName,Status,LastPayDate",
+   "max_records": 5000
+  }
+ },
+ "post": {
+  "sort": "Name"
+ }
+}

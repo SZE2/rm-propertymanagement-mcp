@@ -1,0 +1,40 @@
+{
+ "name": "payments_received",
+ "description": "Payments received in a date range totalled by payer type (tenant/prospect/owner). Portfolio-wide only (payments are not filterable by property here; use rent_roll per property).",
+ "catalog": false,
+ "keywords": [
+  "payments",
+  "payments received",
+  "paid",
+  "cash in",
+  "payer type",
+  "payments by payer",
+  "who paid"
+ ],
+ "heavy": false,
+ "params": {
+  "start": {
+   "type": "date",
+   "default": "month_start"
+  },
+  "end": {
+   "type": "date",
+   "default": "today"
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Payments",
+   "filters": [
+    "TransactionDate,bt,({start},{end})"
+   ],
+   "fields": "PaymentID,Amount,TransactionDate,AccountType",
+   "max_records": 100000
+  }
+ },
+ "post": {
+  "group_by": "AccountType",
+  "sum": "Amount"
+ },
+ "headline": "{count} payments totalling {sum$:Amount} from {start} to {end} (tenant, prospect and owner payers)."
+}

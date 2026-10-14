@@ -1,0 +1,69 @@
+{
+ "name": "lender_package",
+ "description": "Lender/refinance package: current rent roll, trailing-12-month income vs expense, aged receivables, lease expirations next 12 months, occupancy. Several built-in reports run in parallel.",
+ "use": "Lender/refi bundle: rent roll, T12, AR",
+ "keywords": [
+  "lender",
+  "loan",
+  "refinance",
+  "refi",
+  "mortgage",
+  "underwriting",
+  "t12",
+  "t-12",
+  "trailing 12",
+  "due diligence",
+  "package"
+ ],
+ "heavy": true,
+ "answer_hint": "T-12 = last 12 full months. Each part's full data is in its saved file.",
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  }
+ },
+ "request": {
+  "bundle": [
+   {
+    "label": "Rent roll (this month)",
+    "recipe": "rent_roll",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "T-12 income vs expense",
+    "recipe": "profit_and_loss_summary",
+    "params": {
+     "property": "{property}",
+     "start": "t12_start",
+     "end": "last_month_end"
+    }
+   },
+   {
+    "label": "Aged receivables",
+    "recipe": "aged_receivables",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "Lease expirations next 12 months",
+    "recipe": "lease_expirations",
+    "params": {
+     "property": "{property}",
+     "end": "today+365"
+    }
+   },
+   {
+    "label": "Occupancy",
+    "recipe": "occupancy_summary",
+    "params": {
+     "property": "{property}"
+    }
+   }
+  ]
+ }
+}

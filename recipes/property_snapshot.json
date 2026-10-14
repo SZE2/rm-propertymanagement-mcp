@@ -1,0 +1,70 @@
+{
+ "name": "property_snapshot",
+ "description": "One-shot KPI snapshot: occupancy/vacancy, delinquency by property, leases expiring in 90 days, last month's income vs expense (NOI), move-ins/outs this month. Several built-in reports run in parallel.",
+ "use": "One-shot KPI overview of a property",
+ "keywords": [
+  "snapshot",
+  "kpi",
+  "dashboard",
+  "scorecard",
+  "overview",
+  "how is the property doing",
+  "portfolio summary",
+  "property summary"
+ ],
+ "heavy": true,
+ "answer_hint": "Summarize each section; NOI = Income minus Expense.",
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  }
+ },
+ "request": {
+  "bundle": [
+   {
+    "label": "Occupancy",
+    "recipe": "occupancy_summary",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "Delinquency by property",
+    "recipe": "delinquency_by_property",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "Leases expiring next 90 days",
+    "recipe": "lease_expirations",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "Income vs expense last month",
+    "recipe": "profit_and_loss_summary",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "Move-ins this month",
+    "recipe": "move_ins",
+    "params": {
+     "property": "{property}"
+    }
+   },
+   {
+    "label": "Move-outs this month",
+    "recipe": "move_outs",
+    "params": {
+     "property": "{property}"
+    }
+   }
+  ]
+ }
+}

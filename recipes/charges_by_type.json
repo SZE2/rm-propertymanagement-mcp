@@ -1,0 +1,48 @@
+{
+ "name": "charges_by_type",
+ "description": "Charges posted in a date range totalled by charge type (rent, fees, utilities...).",
+ "use": "Billed charges by type over a period",
+ "keywords": [
+  "charges",
+  "billed",
+  "charges by type",
+  "fees charged",
+  "rent charged",
+  "billing"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "start": {
+   "type": "date",
+   "default": "month_start"
+  },
+  "end": {
+   "type": "date",
+   "default": "today"
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Charges",
+   "filters": [
+    "TransactionDate,bt,({start},{end})",
+    "PropertyID,in,({property})"
+   ],
+   "fields": "ChargeID,Amount,PropertyID,ChargeType.Name,ChargeType.Description",
+   "max_records": 100000
+  }
+ },
+ "post": {
+  "rename": {
+   "ChargeType.Name": "code",
+   "ChargeType.Description": "charge_type"
+  },
+  "group_by": "code,charge_type",
+  "sum": "Amount"
+ }
+}

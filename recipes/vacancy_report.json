@@ -1,0 +1,58 @@
+{
+ "name": "vacancy_report",
+ "description": "Vacant units with days vacant, market rent and UnitID (built-in Vacancy report). Ends with a reconciliation against vacant_units (the physical definition): units that differ are listed with the reason.",
+ "use": "Vacant units, days vacant, market rent",
+ "keywords": [
+  "days vacant",
+  "vacancy report",
+  "vacant since",
+  "market rent vacant",
+  "lost rent"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  }
+ },
+ "request": {
+  "report": "Vacancy",
+  "report_id": 74,
+  "grid": "Grid1",
+  "parameters": {
+   "AsOfDate": "{as_of}",
+   "PropertyIDs": "({property})"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesName": "property",
+   "SubEntitiesName": "unit",
+   "UnitTypesName": "unit_type",
+   "MarketRentAmount": "market_rent",
+   "DaysVacant": "days_vacant",
+   "EntitiesEntityID": "PropertyID",
+   "SubEntitiesSubEntityID": "UnitID"
+  },
+  "columns": "property,unit,UnitID,PropertyID,unit_type,days_vacant,market_rent",
+  "sum": "market_rent",
+  "sort": "-days_vacant"
+ },
+ "headline": "{count} vacant units per the Vacancy report as of {as_of}; total market rent {sum$:market_rent}. UnitID included; see the Reconciliation lines for units that differ from vacant_units.",
+ "facts": {
+  "vacant": "count",
+  "market_rent": "sum:market_rent"
+ },
+ "reconcile": {
+  "recipe": "vacant_units",
+  "definition": "physically vacant = nobody living in the unit today; reserved or held units are vacant and flagged; active properties, no parking/other rentables",
+  "why_other": "the built-in report does not list it",
+  "why_mine": "report lists it but vacant_units excludes it (inactive property or other rentable item)"
+ }
+}

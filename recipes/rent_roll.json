@@ -1,0 +1,66 @@
+{
+ "name": "rent_roll",
+ "description": "Rent roll for a period: every unit with tenant (or VACANT), rent charges, other charges, paid, balance, deposit (built-in SummaryRentRoll).",
+ "use": "Every unit with tenant and rent",
+ "keywords": [
+  "rent roll",
+  "rentroll",
+  "units and tenants",
+  "rents",
+  "scheduled rent",
+  "who lives",
+  "occupants",
+  "in-place rent",
+  "monthly rent"
+ ],
+ "heavy": true,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "start": {
+   "type": "date",
+   "default": "month_start"
+  },
+  "end": {
+   "type": "date",
+   "default": "month_end"
+  },
+  "method": {
+   "type": "str",
+   "default": "Current Tenants",
+   "description": "Current Tenants, Activity in Period, or Activity and Prior Balances",
+   "advanced": true
+  }
+ },
+ "request": {
+  "report": "SummaryRentRoll",
+  "report_id": 69,
+  "grid": "Grid1",
+  "parameters": {
+   "StartDate": "{start}",
+   "EndDate": "{end}",
+   "PropOwnerIDs": "({property})",
+   "ReportMethod": "{method}"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesName": "property",
+   "SubEntitiesName": "unit",
+   "AccountsName": "tenant",
+   "UnitTypesName": "unit_type"
+  },
+  "columns": "property,unit,tenant,unit_type,Rented100,RentCharges,MiscCharges,Credits,TotalCharged,TotalPaid,PriorBalance,DebitBalances,SecurityDeposit,VacancyLoss,LossToLease",
+  "sum": "Rented100,RentCharges,MiscCharges,TotalCharged,TotalPaid,DebitBalances,SecurityDeposit"
+ },
+ "headline": "{count} units on the rent roll {start} to {end}: rent charges {sum$:RentCharges}, total charged {sum$:TotalCharged}, paid {sum$:TotalPaid}, balance owed {sum$:DebitBalances}.",
+ "facts": {
+  "units": "count",
+  "total_charged": "sum:TotalCharged",
+  "total_paid": "sum:TotalPaid",
+  "balance_owed": "sum:DebitBalances"
+ }
+}

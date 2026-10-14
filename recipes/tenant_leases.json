@@ -1,0 +1,68 @@
+{
+ "name": "tenant_leases",
+ "description": "A tenant's leases (current and past): unit, move-in/out, lease start/end, notice date, month-to-month flag.",
+ "use": "A tenant's move-in/out and lease dates",
+ "keywords": [
+  "tenant leases",
+  "lease history",
+  "when did tenant move in",
+  "move in date",
+  "move out date",
+  "lease start",
+  "notice",
+  "month to month",
+  "how long has tenant lived",
+  "which units did tenant rent"
+ ],
+ "heavy": false,
+ "answer_hint": "One row per lease/unit, oldest first. lease_start/lease_end are the active lease term (blank end = open-ended); mtm is true when the active term is month-to-month; notice = notice date given.",
+ "params": {
+  "tenant": {
+   "type": "tenant",
+   "description": "Tenant name (or part) or TenantID"
+  },
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Optional: property to narrow the tenant name search"
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Leases",
+   "filters": [
+    "TenantID,eq,{tenant}"
+   ],
+   "fields": "LeaseID,Property.Name,Unit.Name,MoveInDate,MoveOutDate,ExpectedMoveOutDate,NoticeDate,ActiveLeaseRenewal.StartDate,ActiveLeaseRenewal.EndDate,ActiveLeaseRenewal.LeaseTermID",
+   "embeds": "ActiveLeaseRenewal",
+   "max_records": 500
+  }
+ },
+ "post": {
+  "lookup": {
+   "col": "ActiveLeaseRenewal.LeaseTermID",
+   "resource": "LeaseTerms",
+   "key": "LeaseTermID",
+   "values": {
+    "LeaseTerm": "term",
+    "IsMonthToMonth": "mtm"
+   }
+  },
+  "rename": {
+   "Property.Name": "property",
+   "Unit.Name": "unit",
+   "MoveInDate": "move_in",
+   "MoveOutDate": "move_out",
+   "ExpectedMoveOutDate": "expected_move_out",
+   "NoticeDate": "notice",
+   "ActiveLeaseRenewal.StartDate": "lease_start",
+   "ActiveLeaseRenewal.EndDate": "lease_end"
+  },
+  "columns": "LeaseID,property,unit,move_in,move_out,expected_move_out,notice,lease_start,lease_end,term,mtm",
+  "sort": "move_in"
+ },
+ "headline": "{count} leases on record; most recent: unit {last:unit}, move-in {last:move_in}, move-out {last:move_out}, notice {last:notice}, month-to-month {last:mtm}.",
+ "facts": {
+  "leases": "count"
+ }
+}

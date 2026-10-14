@@ -1,0 +1,60 @@
+{
+ "name": "tenant_ledger",
+ "description": "A tenant's ledger: every charge, payment and credit with running balance, NEWEST FIRST by default (oldest_first=true flips it). Rent is not read from here: use recurring charges (query summary='rent') for what the rent is.",
+ "use": "A tenant's charges, payments, balance",
+ "keywords": [
+  "ledger",
+  "tenant ledger",
+  "tenant history",
+  "transactions",
+  "account history",
+  "statement",
+  "payment history",
+  "what did tenant pay",
+  "rent changes",
+  "late payments"
+ ],
+ "heavy": false,
+ "params": {
+  "tenant": {
+   "type": "tenant",
+   "description": "Tenant name (or part) or TenantID"
+  },
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Optional: property to narrow the tenant name search"
+  },
+  "oldest_first": {
+   "type": "bool",
+   "default": false,
+   "description": "list oldest first (default newest first)",
+   "advanced": true
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Tenants/{tenant}/Transactions",
+   "fields": "TransactionDate,TransactionType,Description,Reference,Comment,Amount,Unit.Name",
+   "orderby": "TransactionDate",
+   "max_records": 20000
+  }
+ },
+ "post": {
+  "rename": {
+   "Unit.Name": "Unit"
+  },
+  "running": "Amount",
+  "columns": "TransactionDate,TransactionType,Description,rent_type,Amount,RunningBalance,Reference,Comment,Unit",
+  "newest_first": "?!oldest_first|TransactionDate",
+  "family_col": {
+   "col": "rent_type",
+   "from": "Description"
+  }
+ },
+ "headline": "{count} ledger transactions (newest first unless oldest_first); ending running balance {newest$:RunningBalance}.",
+ "facts": {
+  "transactions": "count",
+  "ending_balance": "newest:RunningBalance"
+ }
+}

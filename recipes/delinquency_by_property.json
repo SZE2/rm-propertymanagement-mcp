@@ -1,0 +1,81 @@
+{
+ "name": "delinquency_by_property",
+ "description": "Total delinquent amount and number of delinquent charges per property (Delinquency report grouped by property).",
+ "use": "Delinquent total per property",
+ "keywords": [
+  "delinquency by property",
+  "delinquency summary",
+  "portfolio delinquency",
+  "total owed per property",
+  "ar by property"
+ ],
+ "heavy": true,
+ "chunks": 2,
+ "answer_hint": "Defaults: balance over $100, more than 5 days late, current tenants + prospects, all charge types.",
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "balance_over": {
+   "type": "number",
+   "default": 100,
+   "offset": 0.01,
+   "aliases": [
+    "min_balance"
+   ],
+   "description": "only accounts owing MORE than this amount (100 = over $100)"
+  },
+  "days_late_over": {
+   "type": "int",
+   "default": 5,
+   "offset": 1,
+   "aliases": [
+    "min_days_late"
+   ],
+   "description": "only accounts MORE than this many days late (5 = more than 5 days)"
+  },
+  "include_prospects": {
+   "type": "bool",
+   "default": true
+  },
+  "tenants": {
+   "type": "str",
+   "default": "Current",
+   "description": "Current, Past or All"
+  }
+ },
+ "request": {
+  "report": "Delinquency",
+  "report_id": 85,
+  "grid": "Grid1",
+  "parameters": {
+   "AsOfDate": "{as_of}",
+   "PropertyIDs": "({property})",
+   "CUSTOMERVALUESTOINCLUDETEXT": "{balance_over}",
+   "DelinquentDaysToInclude": "{days_late_over}",
+   "IncludeProspects": "{include_prospects}",
+   "CustomersToInclude": "{tenants}"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesName": "Property",
+   "ChargesAmount": "Owed"
+  },
+  "group_by": "Property",
+  "sum": "Owed",
+  "sort": "-Owed"
+ },
+ "headline": "{sum$:Owed} delinquent across {count} property(ies) as of {as_of}; highest: {top1:Property} ({top1$:Owed}).",
+ "facts": {
+  "total_owed": "sum:Owed",
+  "properties": "count"
+ },
+ "no_small_grids": true
+}
