@@ -1,0 +1,82 @@
+{
+ "name": "vacant_units",
+ "description": "Physically vacant units (nobody living there) as of a date. Units reserved by a prospect or on a status hold (Rent Ready, Const...) ARE included and flagged in occupancy_flag / status_flag, never excluded. Same set as vacancy_report (plus UnitID). By default excludes parking/other rentable items and inactive properties (include_other_rentables / include_inactive_properties). A past as_of uses the strict IsVacantAsOf filter (reservations not detectable).",
+ "use": "List of vacant units",
+ "keywords": [
+  "vacant",
+  "vacancy",
+  "vacant units",
+  "empty units",
+  "available units",
+  "unoccupied",
+  "not rented"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "include_inactive_properties": {
+   "type": "bool",
+   "default": false,
+   "description": "also include inactive properties",
+   "advanced": true
+  },
+  "include_other_rentables": {
+   "type": "bool",
+   "default": false,
+   "description": "also count parking/storage and other rentable items as units",
+   "advanced": true
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Units",
+   "filters": [
+    "IsVacantAsOf,eq,{as_of}",
+    "?!include_inactive_properties|Property.IsActive,eq,true",
+    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+    "PropertyID,in,({property})"
+   ],
+   "fields": "UnitID,Name,PropertyID,Property.Name,UnitType.Name,CurrentUnitStatus.UnitStatusType.Name,CurrentOccupancyStatus.OccupancyType",
+   "max_records": 50000
+  }
+ },
+ "post": {
+  "rename": {
+   "Property.Name": "property",
+   "Name": "unit",
+   "UnitType.Name": "unit_type",
+   "CurrentUnitStatus.UnitStatusType.Name": "status_flag",
+   "CurrentOccupancyStatus.OccupancyType": "occupancy_flag"
+  },
+  "columns": "property,unit,unit_type,status_flag,occupancy_flag,UnitID,PropertyID",
+  "sort": "property,unit",
+  "also": {
+   "filters": [
+    "CurrentOccupancyStatus.OccupancyType,in,(CurrentProspectReservation,CurrentUnitStatus)",
+    "?!include_inactive_properties|Property.IsActive,eq,true",
+    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+    "PropertyID,in,({property})"
+   ],
+   "key": "UnitID",
+   "keep": "IsVacant"
+  },
+  "value_map": {
+   "CurrentOccupancyStatus.OccupancyType": {
+    "CurrentProspectReservation": "reserved by prospect",
+    "CurrentUnitStatus": ""
+   }
+  }
+ },
+ "headline": "{count} physically vacant units as of {as_of} (status_flag / occupancy_flag show reserved or held units).",
+ "facts": {
+  "vacant": "count"
+ }
+}

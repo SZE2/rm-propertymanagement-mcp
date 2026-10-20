@@ -1,0 +1,73 @@
+{
+ "name": "lease_expirations",
+ "description": "Leases expiring between two dates (default next 90 days) with rent and market rent (built-in LeaseExpiration report).",
+ "use": "Leases expiring soon, with rent",
+ "keywords": [
+  "lease expiration",
+  "expiring leases",
+  "leases ending",
+  "renewals due",
+  "lease end",
+  "expire",
+  "expiration schedule"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "start": {
+   "type": "date",
+   "default": "today"
+  },
+  "end": {
+   "type": "date",
+   "default": "today+90"
+  },
+  "tenants": {
+   "type": "str",
+   "default": "Current",
+   "description": "Current, Past or All",
+   "advanced": true
+  },
+  "exclude_renewed": {
+   "type": "bool",
+   "default": false,
+   "description": "leave out leases already renewed",
+   "advanced": true
+  }
+ },
+ "request": {
+  "report": "LeaseExpiration",
+  "report_id": 76,
+  "parameters": {
+   "CheckedDateRange": "{start} - {end}",
+   "PropertyIDs": "({property})",
+   "CustomersToInclude": "{tenants}",
+   "ExcludeRenewedLeases": "{exclude_renewed}"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesName": "property",
+   "AccountsName": "tenant",
+   "SubEntitiesName": "unit",
+   "UnitTypesName": "unit_type",
+   "LeaseRenewalsEndDate": "lease_end",
+   "Rent": "rent",
+   "MarketRentAmount": "market_rent",
+   "OnNotice": "on_notice",
+   "Renewed": "renewed"
+  },
+  "columns": "property,unit,tenant,unit_type,lease_end,rent,market_rent,on_notice,renewed",
+  "sort": "lease_end",
+  "sum": "rent"
+ },
+ "headline": "{count} leases expire {start} to {end}; combined monthly rent {sum$:rent}.",
+ "facts": {
+  "leases": "count",
+  "rent": "sum:rent"
+ }
+}

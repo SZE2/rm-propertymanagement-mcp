@@ -1,0 +1,43 @@
+{
+ "name": "trial_balance",
+ "description": "Trial balance (debit/credit per GL account) as of a date. Built-in TrialBalanceBasic report.",
+ "use": "Debits/credits per GL account as of a date",
+ "keywords": [
+  "trial balance",
+  "gl balances",
+  "account balances",
+  "debits credits",
+  "balance sheet accounts"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "basis": {
+   "type": "basis",
+   "default": "",
+   "description": "Cash or Accrual; empty = Rent Manager default (Cash)",
+   "advanced": true
+  }
+ },
+ "request": {
+  "report": "TrialBalanceBasic",
+  "report_id": 163,
+  "parameters": {
+   "AsOfDate": "{as_of}",
+   "PropOwnerIDs": "({property})",
+   "Basis": "{basis}"
+  }
+ },
+ "post": {
+  "columns": "GLAccountName,GLAccountTypeName,Debit,Credit",
+  "sum": "Debit,Credit"
+ }
+}

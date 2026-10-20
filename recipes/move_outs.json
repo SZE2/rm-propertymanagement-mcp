@@ -1,0 +1,50 @@
+{
+ "name": "move_outs",
+ "description": "Move-outs in a date range (default this month). Built-in MoveInMoveOut report.",
+ "use": "Move-outs in a period",
+ "keywords": [
+  "move outs",
+  "move-outs",
+  "moved out",
+  "turnover",
+  "vacated",
+  "left"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "start": {
+   "type": "date",
+   "default": "month_start"
+  },
+  "end": {
+   "type": "date",
+   "default": "today"
+  }
+ },
+ "request": {
+  "report": "MoveInMoveOut",
+  "report_id": 77,
+  "grid": "Grid2",
+  "parameters": {
+   "StartDate": "{start}",
+   "EndDate": "{end}",
+   "PropOwnerIDs": "({property})"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesName": "property",
+   "SubEntitiesName": "unit",
+   "AccountsName": "tenant",
+   "LeaseMoveOut": "move_out",
+   "UnitTypesName": "unit_type"
+  },
+  "columns": "property,unit,tenant,unit_type,LeaseMoveIn,move_out",
+  "sort": "move_out"
+ }
+}

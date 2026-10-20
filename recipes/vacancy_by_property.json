@@ -1,0 +1,77 @@
+{
+ "name": "vacancy_by_property",
+ "description": "Count of physically vacant units per property (same definition as vacant_units: reserved and held units included).",
+ "catalog": false,
+ "keywords": [
+  "vacancy by property",
+  "vacant count",
+  "how many vacant",
+  "vacancies per property",
+  "vacancy summary"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "include_inactive_properties": {
+   "type": "bool",
+   "default": false,
+   "description": "also include inactive properties",
+   "advanced": true
+  },
+  "include_other_rentables": {
+   "type": "bool",
+   "default": false,
+   "description": "also count parking/storage and other rentable items as units",
+   "advanced": true
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Units",
+   "filters": [
+    "IsVacantAsOf,eq,{as_of}",
+    "?!include_inactive_properties|Property.IsActive,eq,true",
+    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+    "PropertyID,in,({property})"
+   ],
+   "fields": "UnitID,Name,PropertyID,Property.Name,UnitType.Name,CurrentUnitStatus.UnitStatusType.Name,CurrentOccupancyStatus.OccupancyType",
+   "max_records": 50000
+  }
+ },
+ "post": {
+  "rename": {
+   "Property.Name": "property",
+   "CurrentOccupancyStatus.OccupancyType": "occupancy_flag"
+  },
+  "group_by": "property",
+  "sort": "-count",
+  "also": {
+   "filters": [
+    "CurrentOccupancyStatus.OccupancyType,in,(CurrentProspectReservation,CurrentUnitStatus)",
+    "?!include_inactive_properties|Property.IsActive,eq,true",
+    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+    "PropertyID,in,({property})"
+   ],
+   "key": "UnitID",
+   "keep": "IsVacant"
+  },
+  "value_map": {
+   "CurrentOccupancyStatus.OccupancyType": {
+    "CurrentProspectReservation": "reserved by prospect",
+    "CurrentUnitStatus": ""
+   }
+  }
+ },
+ "headline": "{sum:count} physically vacant units across {count} property(ies) as of {as_of}; most: {top1:property} ({top1:count}).",
+ "facts": {
+  "vacant": "sum:count"
+ }
+}

@@ -1,0 +1,46 @@
+{
+ "name": "tenant_open_charges",
+ "description": "A tenant's unpaid (open) charges and amount due.",
+ "use": "What a tenant owes now (open charges)",
+ "keywords": [
+  "open charges",
+  "unpaid charges",
+  "tenant balance",
+  "amount due",
+  "what does tenant owe",
+  "tenant owe",
+  "does tenant owe",
+  "specific tenant balance",
+  "balance owed",
+  "current balance",
+  "owed"
+ ],
+ "heavy": false,
+ "params": {
+  "tenant": {
+   "type": "tenant",
+   "description": "Tenant name (or part) or TenantID"
+  },
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Optional: narrows the tenant search"
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Tenants/{tenant}/OpenReceivables",
+   "fields": "TransactionDate,ChargeTypeDescription,Description,OriginalAmount,AmountDue,PropertyName,UnitName",
+   "max_records": 5000
+  }
+ },
+ "post": {
+  "sum": "AmountDue,OriginalAmount",
+  "sort": "TransactionDate"
+ },
+ "headline": "{count} open charges; total due {sum$:AmountDue}.",
+ "facts": {
+  "open_charges": "count",
+  "total_due": "sum:AmountDue"
+ }
+}

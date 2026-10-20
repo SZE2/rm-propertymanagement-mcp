@@ -1,0 +1,9 @@
+{
+  "_note": "Extra search words per built-in report NAME (portable across instances), merged into list_reports ranking. Generic words only; no company data.",
+  "OperatingExpenseAnalysis": "capex major repair expenses vendor GL account operating expense",
+  "UnitTurnover": "turn turnover make-ready makeready move-out re-lease days vacant",
+  "MoveInMoveOut": "turnover move-out make-ready lost rent annualized",
+  "OwnerProfitLoss": "owner package income statement",
+  "ProfitLossRecapMonth": "T-12 t12 trailing 12 month monthly by month income statement operating statement NOI",
+  "LoansPayableListing": "debt loan loans lender principal maturity rate debt service"
+}

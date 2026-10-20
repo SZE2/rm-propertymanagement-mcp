@@ -1,0 +1,61 @@
+{
+ "name": "collections",
+ "description": "Cash collected in a date range by charge type, for one property or the whole portfolio (built-in ReceiptsBreakdown report). Use for 'how much did <property> collect in <month>'.",
+ "use": "Cash collected over a period, by charge type",
+ "keywords": [
+  "collections",
+  "collected",
+  "how much collected",
+  "how much did collect",
+  "receipts",
+  "receipts breakdown",
+  "cash collected",
+  "rent collected",
+  "cash received",
+  "collected by property"
+ ],
+ "heavy": false,
+ "answer_hint": "Cash receipts applied by charge type (rent, fees, deposits, prepaid, unallocated). Rent = Rent Charge incl. prepaid rent; rental assistance, use & occupancy, HOA etc. are separate lines. Portfolio total can differ from payments_received (that one totals raw payments).",
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "start": {
+   "type": "date",
+   "default": "month_start"
+  },
+  "end": {
+   "type": "date",
+   "default": "today"
+  }
+ },
+ "request": {
+  "report": "ReceiptsBreakdown",
+  "report_id": 25,
+  "grid": "Grid2",
+  "parameters": {
+   "StartDate": "{start}",
+   "EndDate": "{end}",
+   "PropOwnerIDs": "({property})"
+  }
+ },
+ "post": {
+  "rename": {
+   "ChargeTypesName": "ChargeType",
+   "ChargeTypesDescription": "Description",
+   "Amount": "Collected"
+  },
+  "group_by": "ChargeType,Description",
+  "sum": "Collected",
+  "sort": "-Collected"
+ },
+ "headline": "Collected {sum$:Collected} from {start} to {end} (rent {sumif$:Collected|Description|Rent Charge}).",
+ "facts": {
+  "total_collected": "sum:Collected",
+  "rent_collected": "sumif:Collected|Description|Rent Charge",
+  "charge_types": "count"
+ },
+ "no_small_grids": true
+}

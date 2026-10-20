@@ -1,0 +1,17 @@
+.env
+.token_cache.json
+spec/
+local/
+out/
+*.log
+__pycache__/
+*.pyc
+# Rent Manager reference docs (vendor documents; filenames can contain the company code)
+/*.pdf
+/*.docx
+# Private working rules, editor/agent state, dev notes (never public)
+CLAUDE.local.md
+.claude/
+dev-notes/
+# Build output of tools/make_public_tree.py
+public-tree/

@@ -1,0 +1,97 @@
+{
+ "name": "delinquency",
+ "description": "Delinquent tenants (and prospects) with balance owed, one row per tenant, largest first. Built-in Delinquency report.",
+ "use": "Tenants who owe past due, largest first",
+ "keywords": [
+  "delinquent",
+  "delinquency",
+  "owes",
+  "owe",
+  "arrears",
+  "past due",
+  "late",
+  "behind on rent",
+  "balance due",
+  "who owes"
+ ],
+ "heavy": true,
+ "chunks": 2,
+ "answer_hint": "Defaults: balance over $100, more than 5 days late, current tenants + prospects, all charge types. Differs from aged_receivables (no prospects, no threshold), so totals will not match it.",
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "balance_over": {
+   "type": "number",
+   "default": 100,
+   "offset": 0.01,
+   "aliases": [
+    "min_balance"
+   ],
+   "description": "only accounts owing MORE than this amount (100 = over $100)"
+  },
+  "days_late_over": {
+   "type": "int",
+   "default": 5,
+   "offset": 1,
+   "aliases": [
+    "min_days_late"
+   ],
+   "description": "only accounts MORE than this many days late (5 = more than 5 days)"
+  },
+  "include_prospects": {
+   "type": "bool",
+   "default": true
+  },
+  "tenants": {
+   "type": "str",
+   "default": "Current",
+   "description": "Current, Past or All"
+  },
+  "summary": {
+   "type": "bool",
+   "default": true,
+   "description": "one row per tenant (true) or detail rows per charge (false)",
+   "advanced": true
+  }
+ },
+ "request": {
+  "report": "Delinquency",
+  "report_id": 85,
+  "grid": "Grid1",
+  "parameters": {
+   "AsOfDate": "{as_of}",
+   "PropertyIDs": "({property})",
+   "CUSTOMERVALUESTOINCLUDETEXT": "{balance_over}",
+   "DelinquentDaysToInclude": "{days_late_over}",
+   "IncludeProspects": "{include_prospects}",
+   "IsSummary": "{summary}",
+   "CustomersToInclude": "{tenants}"
+  }
+ },
+ "post": {
+  "rename": {
+   "EntitiesName": "Property",
+   "AccountsName": "Tenant",
+   "AccountsAccountID": "TenantID",
+   "SubEntitiesName": "Unit",
+   "isprospect": "Prospect",
+   "ChargesAmount": "Owed"
+  },
+  "group_by": "Property,Tenant,TenantID,Unit,Prospect",
+  "sum": "Owed",
+  "sort": "-Owed"
+ },
+ "headline": "{count} delinquent accounts (current tenants + prospects) owe {sum$:Owed} as of {as_of}; largest: {top1:Tenant} ({top1$:Owed}).",
+ "facts": {
+  "accounts": "count",
+  "total_owed": "sum:Owed"
+ },
+ "no_small_grids": true
+}

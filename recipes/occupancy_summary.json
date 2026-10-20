@@ -1,0 +1,95 @@
+{
+ "name": "occupancy_summary",
+ "description": "Units, vacant units, occupied units, % vacant and % occupied per property. Physical vacancy: same definition as vacant_units (reserved/held units count as vacant), so vacancy + occupancy = 100%. Use for occupancy rate.",
+ "use": "Occupancy and % vacant per property",
+ "keywords": [
+  "occupancy",
+  "occupancy rate",
+  "percent vacant",
+  "vacancy rate",
+  "occupied",
+  "physical occupancy"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "as_of": {
+   "type": "date",
+   "default": "today"
+  },
+  "include_inactive_properties": {
+   "type": "bool",
+   "default": false,
+   "description": "also include inactive properties",
+   "advanced": true
+  },
+  "include_other_rentables": {
+   "type": "bool",
+   "default": false,
+   "description": "also count parking/storage and other rentable items as units",
+   "advanced": true
+  }
+ },
+ "request": {
+  "query": {
+   "resource": "Units",
+   "filters": [
+    "?!include_inactive_properties|Property.IsActive,eq,true",
+    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+    "PropertyID,in,({property})"
+   ],
+   "fields": "UnitID,PropertyID,Property.Name",
+   "max_records": 50000
+  }
+ },
+ "post": {
+  "rename": {
+   "Property.Name": "property"
+  },
+  "mark": {
+   "key": "UnitID",
+   "col": "vacant",
+   "filters": [
+    "IsVacantAsOf,eq,{as_of}",
+    "?!include_inactive_properties|Property.IsActive,eq,true",
+    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+    "PropertyID,in,({property})"
+   ],
+   "also": {
+    "filters": [
+     "CurrentOccupancyStatus.OccupancyType,in,(CurrentProspectReservation,CurrentUnitStatus)",
+     "?!include_inactive_properties|Property.IsActive,eq,true",
+     "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+     "PropertyID,in,({property})"
+    ],
+    "key": "UnitID",
+    "keep": "IsVacant"
+   }
+  },
+  "group_by": "property,PropertyID",
+  "group_sum": "vacant",
+  "calc": {
+   "totalUnits": "count",
+   "vacantUnits": "vacant",
+   "occupiedUnits": "count-vacant",
+   "pct_vacant": "pct:vacant/count",
+   "pct_occupied": "pct:occupiedUnits/count"
+  },
+  "columns": "property,PropertyID,totalUnits,vacantUnits,occupiedUnits,pct_vacant,pct_occupied",
+  "sum": "totalUnits,vacantUnits,occupiedUnits",
+  "sort": "-vacantUnits"
+ },
+ "headline": "{sum:vacantUnits} of {sum:totalUnits} units physically vacant ({pct:vacantUnits/totalUnits}); {sum:occupiedUnits} occupied ({pct:occupiedUnits/totalUnits}) across {count} property(ies) as of {as_of}.",
+ "facts": {
+  "vacant": "sum:vacantUnits",
+  "units": "sum:totalUnits",
+  "pct_vacant": "pct:vacantUnits/totalUnits",
+  "occupied": "sum:occupiedUnits",
+  "pct_occupied": "pct:occupiedUnits/totalUnits"
+ },
+ "answer_hint": "Occupancy = physically vacant rule, same as vacant_units (reserved/held units count as vacant; active properties, no parking/other rentables by default), so vacancy% + occupancy% = 100% and vacant equals the vacant_units count. vacancy_report lists the same units (a few unit types such as event rooms are omitted by that report; it prints the differences)."
+}

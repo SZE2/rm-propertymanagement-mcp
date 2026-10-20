@@ -1,0 +1,61 @@
+{
+ "name": "profit_and_loss",
+ "description": "Profit & loss detail: amount per GL account for a date range (default last month). Built-in ProfitLoss report. For totals/NOI use profit_and_loss_summary.",
+ "use": "P&L per GL account for a period",
+ "keywords": [
+  "profit and loss",
+  "p&l",
+  "pnl",
+  "income statement",
+  "income",
+  "expenses",
+  "operating statement",
+  "p&l detail",
+  "gl accounts",
+  "spend",
+  "repairs and maintenance",
+  "capital expenditures"
+ ],
+ "heavy": false,
+ "params": {
+  "property": {
+   "type": "property",
+   "default": "",
+   "description": "Property name/nickname/ID, comma-separated for several; empty = all"
+  },
+  "start": {
+   "type": "date",
+   "default": "last_month_start"
+  },
+  "end": {
+   "type": "date",
+   "default": "last_month_end"
+  },
+  "basis": {
+   "type": "basis",
+   "default": "",
+   "description": "Cash or Accrual; empty = Rent Manager default (Cash)"
+  },
+  "show_hidden_rows": {
+   "type": "bool",
+   "default": false,
+   "description": "also show rows the report hides (HideRow = true); these are parent/subtotal rows, so sums and NOI double count",
+   "advanced": true
+  }
+ },
+ "request": {
+  "report": "ProfitLoss",
+  "report_id": 43,
+  "parameters": {
+   "StartDate": "{start}",
+   "EndDate": "{end}",
+   "PropOwnerIDs": "({property})",
+   "Basis": "{basis}"
+  }
+ },
+ "post": {
+  "where": "?!show_hidden_rows|HideRow,eq,False",
+  "columns": "GLAccountName,GLAccountTypeName,Amount,Percent",
+  "show": 150
+ }
+}
