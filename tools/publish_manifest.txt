@@ -17,6 +17,7 @@ KNOWN-ISSUES.md
 docs/DEVELOPING.md
 docs/WHERE-IT-WORKS.md
 docs/CHATGPT.md
+docs/HERMES.md
 recipes/*.json
 report_keywords.json
 rm.py
@@ -30,6 +31,7 @@ tests/test_mcp.py
 tests/test_recipes.py
 tests/test_unit_chunks.py
 tests/test_unit_chatgpt.py
+tests/test_unit_hermes.py
 tests/test_unit_item1.py
 tests/test_unit_item2.py
 tests/test_unit_item4.py

@@ -7,6 +7,10 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+## [0.11.0-beta] - 2026-10-20
+- Added: Hermes Agent setup guide `docs/HERMES.md` and `setup.py --print-hermes-config` (exact `hermes mcp add` command and `config.yaml` entry; no credentials or app settings are changed). Offline tests in `tests/test_unit_hermes.py`.
+- Fixed: on Python 3.9 to 3.11, recipe totals and computed columns crashed with `'int' object has no attribute 'is_integer'` when a sum was an integer (for example an empty result). The number is now converted to float first.
+
 ## [0.10.0-beta] - 2026-10-18
 - Added: `docs/WEB-CHAT.md` explains why claude.ai web chat and the phone app's normal chat are not supported yet and what it would take (hosting or Anthropic's Enterprise-only MCP tunnels, HTTP transport, sign-in).
 - Changed: when rows are missing, the reply now STARTS with one `MORE: K of N rows shown; the rest is NOT in this reply. ...` line (second, after any `CAPPED`/`PARTIAL` line; above `Answer:` and the table) with `read_result` and the local `File:` as before (`RM_DELIVERY` still applies); the end of the reply keeps only a one-line `See MORE above` pointer. A result over `RM_BIG_ROWS` rows (default 1000) shows only `RM_SAMPLE_ROWS` rows (default 10) unless `show` is given, and the notice says `LARGE RESULT`.
@@ -53,5 +57,6 @@ First public release. Unofficial, read-only, beta.
 
 Before this release the project went through internal development iterations (labelled v1 to v10 in private notes). They were never published and are not part of the public version history.
 
-[Unreleased]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.10.0-beta...HEAD
+[Unreleased]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.11.0-beta...HEAD
+[0.11.0-beta]: https://github.com/SZE2/rm-propertymanagement-mcp/compare/v0.10.0-beta...v0.11.0-beta
 [0.10.0-beta]: https://github.com/SZE2/rm-propertymanagement-mcp/releases/tag/v0.10.0-beta

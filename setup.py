@@ -176,6 +176,40 @@ def print_chatgpt_config():
     print("  Full setup and verification: docs/CHATGPT.md")
 
 
+def hermes_entry():
+    """Hermes Agent stdio settings; never includes credentials (server.py reads .env next to itself)."""
+    return dict(server_entry(), timeout=180, connect_timeout=60)
+
+
+def hermes_yaml():
+    entry = hermes_entry()
+    # JSON strings are valid YAML double-quoted scalars, so odd paths round-trip safely.
+    return "\n".join([
+        "mcp_servers:",
+        "  rentmanager:",
+        "    command: %s" % json.dumps(entry["command"], ensure_ascii=False),
+        "    args: [%s]" % json.dumps(entry["args"][0], ensure_ascii=False),
+        "    timeout: %d" % entry["timeout"],
+        "    connect_timeout: %d" % entry["connect_timeout"],
+        "    sampling:",
+        "      enabled: false",
+    ])
+
+
+def print_hermes_config():
+    """Print registration help only. Does not read .env, connect, or edit any Hermes config."""
+    entry = hermes_entry()
+    print("\nHermes Agent: local MCP registration (nothing was registered automatically).")
+    print("  Option 1, CLI (add -p <profile> before 'mcp' to target a non-default profile):")
+    print("    hermes mcp add rentmanager --command %s --args %s" % (shell_arg(entry["command"]), shell_arg(entry["args"][0])))
+    print("  Option 2, config.yaml (back it up; merge under mcp_servers; keep other servers):")
+    print(hermes_yaml())
+    print("\n  Then restart Hermes (or the gateway) and run:  hermes mcp test rentmanager")
+    print("  Tools appear as mcp_rentmanager_<tool> (e.g. mcp_rentmanager_find_recipe).")
+    print("  Keep your Rent Manager password in .env; do not put credentials into Hermes config or chat.")
+    print("  Full setup and verification: docs/HERMES.md")
+
+
 def print_config():
     py, srv = sys.executable, os.path.join(HERE, "server.py")
     print("\nRegister the MCP server (choose your client; nothing was registered automatically):")
@@ -195,6 +229,7 @@ def print_config():
     print("     Then fully quit Claude Desktop (Windows: also the tray icon; macOS: Cmd+Q) and reopen it.")
     print("\n  Then ask Claude e.g.: 'Using rentmanager, which units are vacant at <property>?'")
     print_chatgpt_config()
+    print_hermes_config()
 
 
 def merge_desktop_config(path=None, confirm=None):
@@ -254,6 +289,7 @@ def build_parser():
     output = ap.add_mutually_exclusive_group()
     output.add_argument("--print-config", action="store_true", help="only print registration help for Claude, ChatGPT desktop and Codex; edits nothing")
     output.add_argument("--print-chatgpt-config", action="store_true", help="only print ChatGPT desktop / Codex STDIO settings, CLI command and TOML; edits nothing, needs no credentials")
+    output.add_argument("--print-hermes-config", action="store_true", help="only print Hermes Agent MCP registration (CLI command and config.yaml); edits nothing, needs no credentials")
     ap.add_argument("--merge-desktop-config", action="store_true", help="add the rentmanager entry to claude_desktop_config.json (run it yourself in a terminal; asks y/n, backs up, keeps other servers)")
     ap.add_argument("--config-path", metavar="FILE", help="with --merge-desktop-config: use this config file instead of auto-detecting")
     return ap
@@ -262,6 +298,7 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
     if args.print_chatgpt_config: return print_chatgpt_config()
+    if args.print_hermes_config: return print_hermes_config()
     if args.print_config: return print_config()
     if args.merge_desktop_config:
         if not sys.stdin.isatty() and not args.config_path:

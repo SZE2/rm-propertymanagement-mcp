@@ -3,6 +3,7 @@
 This repo has two audiences. Pick yours:
 
 - **The user wants ChatGPT desktop/web or Codex setup**: read `docs/CHATGPT.md` and follow the appropriate local or tunnel steps.
+- **The user wants Hermes Agent setup**: read `docs/HERMES.md` and follow it.
 - **The user wants Claude setup** (for example "set this up for me" in Claude): read `CLAUDE.md` and follow it step by step.
 - **You are changing the code or cutting a release**: read `docs/MAINTAINING.md`, then `docs/DEVELOPING.md`.
 
