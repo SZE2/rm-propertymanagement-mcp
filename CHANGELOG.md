@@ -7,6 +7,9 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+- Fixed: offline unit tests now use temporary hand-authored synthetic API contracts instead of requiring a private setup-generated spec. Added regression coverage for fixture isolation, real validation/index loading and HistoryNotes subresource routing; the server's read-only behavior is unchanged.
+- Added: standard-library-only offline runner with a socket guard, plus Python 3.9/3.11/3.14 CI checks for both the checkout and manifest-only public tree.
+
 ## [0.11.0-beta] - 2026-10-20
 - Added: Hermes Agent setup guide `docs/HERMES.md` and `setup.py --print-hermes-config` (exact `hermes mcp add` command and `config.yaml` entry; no credentials or app settings are changed). Offline tests in `tests/test_unit_hermes.py`.
 - Fixed: on Python 3.9 to 3.11, recipe totals and computed columns crashed with `'int' object has no attribute 'is_integer'` when a sum was an integer (for example an empty result). The number is now converted to float first.

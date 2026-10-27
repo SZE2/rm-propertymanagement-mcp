@@ -7,6 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 OOM_BODY = {"DeveloperMessage": "Exception of type 'System.OutOfMemoryException' was thrown.", "UserMessage": "Unspecified Error"}
 
@@ -143,7 +144,6 @@ class OutOfMemory(unittest.TestCase):
         self.assertIn("ran out of memory", rows.partial)
 
     def test_report_oom_message(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         rep = server.report_by("30")
         with mock.patch.object(server, "api", lambda path, params=None, timeout=None: (500, {}, OOM_BODY)):
             with self.assertRaises(server.ToolError) as cm:
@@ -155,7 +155,6 @@ class OutOfMemory(unittest.TestCase):
 
 class QueryLevel(unittest.TestCase):
     def setUp(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         self.td = tempfile.TemporaryDirectory()
         mock.patch.dict(os.environ, {"RM_OUT": self.td.name}).start()
         mock.patch.object(server, "all_scope_label", lambda: "All properties").start()
@@ -232,7 +231,6 @@ class Suggestions(unittest.TestCase):
             self.assertIn("no built-in report takes a tenant filter", out.lower(), q)
 
     def test_search_models_shows_them_too(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         out = server.t_search_models("full tenant ledger for one or several tenants at a property")
         self.assertIn("Built-in report suggestion (ledger)", out)
         self.assertIn("report 30", out)
@@ -285,7 +283,6 @@ def ledger_rows(n, amount=100.0, month="2026-07"):
 
 class TenantLedger(unittest.TestCase):
     def setUp(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         self.td = tempfile.TemporaryDirectory()
         mock.patch.dict(os.environ, {"RM_OUT": self.td.name}).start()
         mock.patch.object(server, "all_scope_label", lambda: "All properties").start()

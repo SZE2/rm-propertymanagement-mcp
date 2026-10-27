@@ -7,6 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import rm, server
+from offline_fixture import setUpModule
 
 GOOD = "https://files.rentmanager.com/files/get/?EID=1&FKey=SECRETSIG"
 

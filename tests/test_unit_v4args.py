@@ -4,6 +4,7 @@ import os, sys, json, datetime, unittest
 from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import server
+from offline_fixture import setUpModule
 
 PROPS = [{"PropertyID": 12, "Name": "Oak Court", "ShortName": "OAK", "IsActive": True},
          {"PropertyID": 7, "Name": "Elm Terrace", "ShortName": "ELM", "IsActive": True}]

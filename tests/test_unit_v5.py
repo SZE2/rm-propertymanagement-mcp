@@ -6,6 +6,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 UNITS = [  # (UnitID, property, vacant)
     (1, "Oak", True), (2, "Oak", False), (3, "Oak", False), (4, "Oak", False),

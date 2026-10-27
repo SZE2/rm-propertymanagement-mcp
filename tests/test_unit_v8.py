@@ -7,6 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server, rm
+from offline_fixture import setUpModule
 
 LEDGER = [{"TransactionDate": "2026-01-01T00:00:00", "TransactionType": "Charge", "Description": "Rent Charge", "Amount": 1000.0, "SubsidyID": -1},
           {"TransactionDate": "2026-01-01T00:00:00", "TransactionType": "Charge", "Description": "Rental Assistance", "Amount": 500.0, "SubsidyID": -1},
@@ -100,7 +101,6 @@ class RentSummary(unittest.TestCase):
         self.assertEqual(len(out), 1); self.assertIn("no rent charge in effect", out[0]["note"])
 
     def test_rent_summary_raises_cap_and_says_partial(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         seen = {}
         def f(path, prm, mx, *a, **k):
             seen["max"] = mx
@@ -135,7 +135,6 @@ class NewestLease(unittest.TestCase):
         self.assertEqual([r["d"] for r in out], ["2026-01-01", "2025-01-01", None])
 
     def test_capped_fetch_says_newest_missing_and_ignored_note(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         def f(path, prm, mx, *a, **k): return [{"TransactionDate": "2020-01-01T00:00:00", "Amount": 1.0} for _ in range(5)], 25000, 1, 200
         with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"RM_OUT": td}), mock.patch.object(server, "fetch_ordered", f):
             txt = server.t_query("Tenants/5/Transactions", fields="TransactionDate,Amount", most_recent_first=True)

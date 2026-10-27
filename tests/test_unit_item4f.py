@@ -5,6 +5,7 @@ import os, sys, unittest
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 
 class ReportByName(unittest.TestCase):
