@@ -29,6 +29,7 @@ tests/test_issue_tools.py
 tests/test_mcp.py
 tests/test_recipes.py
 tests/test_unit_chunks.py
+tests/test_unit_date_filters.py
 tests/test_unit_chatgpt.py
 tests/test_unit_item1.py
 tests/test_unit_item2.py
