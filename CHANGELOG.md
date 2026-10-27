@@ -7,6 +7,8 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+- Fixed: `query` and `count` reject literal `null` comparisons on schema-declared DateTime filters before any API request, with real-date and local missing-date guidance. Non-date and unknown-type filters are unchanged.
+
 ## [0.10.0-beta] - 2026-10-18
 - Added: `docs/WEB-CHAT.md` explains why claude.ai web chat and the phone app's normal chat are not supported yet and what it would take (hosting or Anthropic's Enterprise-only MCP tunnels, HTTP transport, sign-in).
 - Changed: when rows are missing, the reply now STARTS with one `MORE: K of N rows shown; the rest is NOT in this reply. ...` line (second, after any `CAPPED`/`PARTIAL` line; above `Answer:` and the table) with `read_result` and the local `File:` as before (`RM_DELIVERY` still applies); the end of the reply keeps only a one-line `See MORE above` pointer. A result over `RM_BIG_ROWS` rows (default 1000) shows only `RM_SAMPLE_ROWS` rows (default 10) unless `show` is given, and the notice says `LARGE RESULT`.
