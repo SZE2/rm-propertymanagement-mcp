@@ -8,6 +8,7 @@
 .github/ISSUE_TEMPLATE/bug.md
 .github/ISSUE_TEMPLATE/feature.md
 .github/ISSUE_TEMPLATE/config.yml
+.github/workflows/offline.yml
 CLAUDE.md
 LICENSE
 README.md
@@ -17,6 +18,7 @@ KNOWN-ISSUES.md
 docs/DEVELOPING.md
 docs/WHERE-IT-WORKS.md
 docs/CHATGPT.md
+docs/HERMES.md
 recipes/*.json
 report_keywords.json
 rm.py
@@ -30,6 +32,10 @@ tests/test_mcp.py
 tests/test_recipes.py
 tests/test_unit_chunks.py
 tests/test_unit_chatgpt.py
+tests/test_unit_hermes.py
+tests/test_unit_offline.py
+tests/offline_fixture.py
+tests/fixtures/offline_spec.json
 tests/test_unit_item1.py
 tests/test_unit_item2.py
 tests/test_unit_item4.py
@@ -52,6 +58,7 @@ tests/test_unit_v12.py
 tests/test_unit_delivery.py
 tools/make_issue.py
 tools/make_public_tree.py
+tools/test_offline.py
 tools/publish_manifest.txt
 CHANGELOG.md
 AGENTS.md

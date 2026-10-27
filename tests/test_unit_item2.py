@@ -8,6 +8,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 ROWS = [
     {"Property": "Oak", "Tenant": "Ann", "Unit": "002", "Owed": 1500.5, "vacantUnits": 3, "totalUnits": 12, "0_30": 10.0},

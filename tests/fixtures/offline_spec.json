@@ -1,0 +1,63 @@
+{
+  "description": "Hand-authored synthetic contracts for offline tests, not a downloaded API spec or a complete API reference. Identifiers mirror public recipes and test expectations only.",
+  "resources": {
+    "Units": {"model": "Unit"},
+    "Payments": {"model": "Payment"},
+    "Charges": {"model": "Charge"},
+    "RecurringCharges": {"model": "RecurringCharge"},
+    "Leases": {"model": "Lease"},
+    "HistoryNotes": {"model": "HistoryNote"},
+    "Tenants": {"model": "Tenant", "subs": {"Transactions": "Transaction", "HistoryNotes": "HistoryNote"}}
+  },
+  "models": {
+    "Unit": {
+      "fields": {"UnitID": "int", "Name": "string"},
+      "filters": ["UnitID", "Name"],
+      "embeds": []
+    },
+    "Payment": {
+      "fields": {"PaymentID": "int", "TransactionDate": "date"},
+      "filters": ["PaymentID", "TransactionDate"],
+      "embeds": []
+    },
+    "Charge": {
+      "fields": {"ChargeID": "int", "Amount": "decimal"},
+      "filters": ["ChargeID", "Amount"],
+      "embeds": []
+    },
+    "RecurringCharge": {
+      "fields": {"EntityKeyID": "int", "EntityType": "string", "UnitID": "int", "Amount": "decimal", "FromDate": "date", "ToDate": "date"},
+      "filters": ["UnitID", "EntityType"],
+      "embeds": [{"Name": "ChargeType"}]
+    },
+    "Lease": {
+      "fields": {"LeaseID": "int", "TenantID": "int", "UnitID": "int", "PropertyID": "int", "StartDate": "date", "EndDate": "date", "MoveInDate": "date", "MoveOutDate": "date", "NoticeDate": "date", "ExpectedMoveOutDate": "date"},
+      "filters": ["UnitID", "TenantID", "Property.Name"],
+      "embeds": [{"Name": "Property"}, {"Name": "Unit"}, {"Name": "ActiveLeaseRenewal"}]
+    },
+    "HistoryNote": {
+      "fields": {"HistoryID": "int", "HistoryCategoryID": "int", "Note": "string"},
+      "filters": ["HistoryID", "HistoryCategoryID", "Tenant.TenantID", "Attachment.FileID"],
+      "embeds": [{"Name": "Tenant"}, {"Name": "Attachment"}]
+    },
+    "Tenant": {
+      "fields": {"TenantID": "int", "Name": "string", "PropertyID": "int", "Balance": "decimal", "Status": "string"},
+      "filters": ["TenantID", "PropertyID"],
+      "embeds": []
+    },
+    "Transaction": {
+      "fields": {"TransactionDate": "date", "TransactionType": "string", "Description": "string", "Reference": "string", "Comment": "string", "Amount": "decimal", "SubsidyID": "int", "UnitID": "int"},
+      "filters": ["TransactionDate"],
+      "embeds": [{"Name": "Unit"}]
+    }
+  },
+  "reports": [
+    {"id": "25", "name": "ReceiptsBreakdown", "params": {"StartDate": "date", "EndDate": "date", "PropOwnerIDs": "properties"}},
+    {"id": "30", "name": "ChargeDetail", "params": {"StartDate": "date", "EndDate": "date", "PropertyIDs": "properties"}},
+    {"id": "43", "name": "ProfitLoss", "params": {"StartDate": "date", "EndDate": "date", "PropOwnerIDs": "properties", "Basis": "string"}},
+    {"id": "67", "name": "RentRoll", "params": {"PropOwnerIDs": "properties"}},
+    {"id": "69", "name": "SummaryRentRoll", "params": {"StartDate": "date", "EndDate": "date", "PropOwnerIDs": "properties", "ReportMethod": "string", "SHOWWHOLEDOLLAR": "bool", "MRProration": "string"}},
+    {"id": "78", "name": "AgedReceivables", "params": {"AsOfDate": "date", "PropertyIDs": "properties", "CustomersToInclude": "string", "IncludeProspects": "bool", "CUSTOMERVALUESTOINCLUDETEXT": "string"}},
+    {"id": "85", "name": "Delinquency", "params": {"AsOfDate": "date", "PropertyIDs": "properties", "CUSTOMERVALUESTOINCLUDETEXT": "string", "DelinquentDaysToInclude": "string", "IncludeProspects": "bool", "IsSummary": "bool", "CustomersToInclude": "string"}}
+  ]
+}

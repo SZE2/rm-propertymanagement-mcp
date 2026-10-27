@@ -6,6 +6,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 
 class InFilter(unittest.TestCase):
@@ -23,11 +24,9 @@ class InFilter(unittest.TestCase):
         self.assertEqual(server.split_top(server.normalize_in("Name,in,(a;b);UnitID,eq,1")), ["Name,in,(a,b)", "UnitID,eq,1"])
 
     def test_validate_batches(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         self.assertEqual(server.validate("Unit", "", "", "UnitID,in,5;6;7")[2], "UnitID,in,(5,6,7)")
 
     def test_bad_filter_has_alias_hint_and_closest(self):
-        if not server.SI.load_index(): self.skipTest("no spec index")
         probs = server.validate("Unit", "", "", "UnitNumber,eq,5")[4]
         self.assertTrue(probs and "Use: Name" in probs[0] and "Close filterable fields" in probs[0])
 

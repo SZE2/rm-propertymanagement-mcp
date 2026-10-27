@@ -1,0 +1,32 @@
+name: Offline regression
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.11', '3.14']
+    env:
+      RM_MCP_LOG: '0'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run stdlib-only offline suites (no setup or credentials)
+        run: python -S tools/test_offline.py
+      - name: Build and scan the manifest-only public tree
+        run: python -S tools/make_public_tree.py --out "$RUNNER_TEMP/rm-public"
+      - name: Verify the public tree also has a complete offline suite
+        working-directory: ${{ runner.temp }}/rm-public
+        run: python -S tools/test_offline.py

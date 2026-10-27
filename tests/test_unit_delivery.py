@@ -7,6 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 ROWS = [{"LeaseID": i, "UnitID": 1000 + i, "MoveInDate": "2020-01-%02d" % (i % 28 + 1), "Note": "a, \"quoted\" note" if i % 7 == 0 else ""}
         for i in range(1941)]

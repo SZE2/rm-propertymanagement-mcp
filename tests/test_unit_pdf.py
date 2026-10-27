@@ -6,6 +6,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import server
+from offline_fixture import setUpModule
 
 PDF = b"%PDF-1.4\n%fake\n"
 PROPS = [{"id": 11, "name": "Oak Court", "short": "", "active": True, "aliases": []},
