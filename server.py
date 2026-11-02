@@ -917,7 +917,15 @@ def find_resource(path):
         ctrl = by_model.get(parts[0].lower()) or by_model.get(parts[0].lower().rstrip("s"))
     if not ctrl:
         hits = [n for _, n in SI.search(parts[0], limit=5)]
-        raise ToolError("Unknown resource '%s'. Did you mean: %s" % (parts[0], ", ".join(suggest(parts[0], i["resources"]) + hits)))
+        paths = []
+        for parent, resource in sorted(i["resources"].items()):
+            for name, sub in sorted((resource.get("subs") or {}).items()):
+                if name.lower() != parts[0].lower(): continue
+                if sub.get("all"): paths.append("%s/%s" % (parent, name))
+                if sub.get("by_id"): paths.append("%s/{id}/%s" % (parent, name))
+        note = (" Matching sub-resource paths (replace {id} with a numeric ID; check the parent): %s%s" %
+                (", ".join(paths[:10]), " (more matches omitted)" if len(paths) > 10 else "")) if paths else ""
+        raise ToolError("Unknown resource '%s'. Did you mean: %s%s" % (parts[0], ", ".join(suggest(parts[0], i["resources"]) + hits), note))
     r = i["resources"][ctrl]
     out = {"ctrl": ctrl, "id": None, "sub": None, "model": r.get("model"), "list": r.get("list"), "status": r.get("status")}
     rest = parts[1:]
@@ -1026,8 +1034,9 @@ def validate(model, fields="", embeds="", filters="", orderby=""):
             fixed_fields.append((lower_f.get(root.lower()) or lower_e.get(root.lower())) + f[len(root):])
         else:
             al = {k.lower(): v for k, v in (concepts().get("field_aliases") or {}).items()}
-            probs.append("field '%s' not in %s.%s Close: %s (describe_model lists fields; * marks filterable ones)" % (
-                f, model, " Use: %s." % al[root.lower()] if root.lower() in al else "", ", ".join(suggest(root, fset | eset)) or "(see describe_model)"))
+            probs.append("field '%s' not in %s.%s Close: %s (describe_model lists fields; * marks filterable ones)%s" % (
+                f, model, " Use: %s." % al[root.lower()] if root.lower() in al else "", ", ".join(suggest(root, fset | eset)) or "(see describe_model)",
+                " Inspect describe_model(section=embeds) and the embedded model's fields to verify a nested path." if eset else ""))
         if "." in f:  # dotted field needs its (deepest) embed, e.g. CurrentUnitStatus.UnitStatusType.Name -> CurrentUnitStatus.UnitStatusType
             segs = f.split(".")
             for n in range(len(segs) - 1, 0, -1):
