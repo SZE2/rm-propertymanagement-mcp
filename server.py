@@ -35,7 +35,7 @@ INSTRUCTIONS = """Rent Manager: read-only, LIVE data. Never request passwords in
 2. No recipe: list_reports(words) -> run_report(id, parameters). One report covers all properties.
 3. PDF: report_pdf(report, properties); for report contents use run_recipe/run_report.
 4. Else search_models -> describe_model -> count -> query. Batch ids: UnitID,in,(1,2,3). enum_values lists enums; report_info lists report options.
-BIG RESULTS: first line 'MORE:' = rows missing; page with read_result(result_id, offset) or read its File (if your file tools run here). Don't raise show.
+BIG RESULTS: 'MORE:' = rows missing; use read_result(result_id, offset) when offered unless a shared filesystem is confirmed. Don't raise show.
 RENT = recurring charges + subsidy: query RecurringCharges summary='rent'. Ledger = paid history only.
 Vague name: resolve(term) first (names, LLC, addresses, owners; '' lists all); no confident match: ask user. kind=tenant|unit|owner|vendor.
 Files: find_attachments -> download_file. locations lists databases; location=name/ID on any tool.
@@ -663,7 +663,7 @@ def deliver(shown, nshown, jp, cp, saved_rows=None, large=False):
     note = "MORE: %d of %d rows shown%s; the rest is NOT in this reply. " % (nshown, len(shown), " (LARGE RESULT: %d rows)" % len(shown) if large else "")
     if mode == "mcp": note += "%s pages it (any client)" % rr
     elif mode == "file": note += "File: %s has all rows (if your file tools run on this computer)" % path
-    else: note += "%s pages it (any client); or File: %s if your file tools run on this computer" % (rr, path)
+    else: note += "%s pages it (any client); or File: %s if your file tools run on this computer. Use read_result unless you have confirmed a shared filesystem" % (rr, path)
     note += "; or narrow the request (date range, property) or use a built-in report."
     return "%s\nSee MORE above: %s" % (note, ("File: " + path) if mode == "file" else rr)
 
