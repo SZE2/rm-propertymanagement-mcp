@@ -8,6 +8,8 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 ## [Unreleased]
 
 - Fixed: `query` and `count` reject literal `null` comparisons on schema-declared DateTime filters before any API request, with real-date and local missing-date guidance. Non-date and unknown-type filters are unchanged.
+- Added: Hermes Agent setup guide `docs/HERMES.md` and `setup.py --print-hermes-config` (exact `hermes mcp add` command and `config.yaml` entry; no credentials or app settings are changed).
+- Fixed: on Python 3.9 to 3.11, recipe totals and computed columns crashed with `'int' object has no attribute 'is_integer'` when a sum was an integer (for example an empty result). The number is now converted to float first.
 
 ## [0.10.0-beta] - 2026-10-18
 - Added: `docs/WEB-CHAT.md` explains why claude.ai web chat and the phone app's normal chat are not supported yet and what it would take (hosting or Anthropic's Enterprise-only MCP tunnels, HTTP transport, sign-in).

@@ -2157,7 +2157,7 @@ def _col(rows, col):
 def _colsum(rows, col):
     _col(rows, col)
     v = round(sum(_num(r.get(col)) or 0.0 for r in rows), 2)
-    return int(v) if v.is_integer() else v
+    return int(v) if float(v).is_integer() else v
 
 def eval_token(kind, arg, rows, vals, facts):
     """Raw value of one token (number, str or None)."""
@@ -2167,7 +2167,7 @@ def eval_token(kind, arg, rows, vals, facts):
         col, mcol, text = ([x.strip() for x in (arg or "").split("|")] + ["", "", ""])[:3]
         _col(rows, col); _col(rows, mcol)
         v = round(sum(_num(r.get(col)) or 0.0 for r in rows if text.lower() in str(r.get(mcol) or "").lower()), 2)
-        return int(v) if v.is_integer() else v
+        return int(v) if float(v).is_integer() else v
     if kind == "newest":   # value in the chronologically newest row (rows may be oldest-first or newest-first)
         if not rows: return None
         _col(rows, arg)
@@ -2448,7 +2448,7 @@ def apply_calc(row, calc):
         elif "-" in e:
             a, _, b = e.partition("-")
             v = round((_num(row.get(a.strip())) or 0.0) - (_num(row.get(b.strip())) or 0.0), 2)
-            row[name] = int(v) if v.is_integer() else v
+            row[name] = int(v) if float(v).is_integer() else v
         else:
             v = row.get(e)
             row[name] = int(v) if isinstance(v, float) and v.is_integer() else v
