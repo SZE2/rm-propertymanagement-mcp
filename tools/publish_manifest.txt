@@ -17,6 +17,7 @@ KNOWN-ISSUES.md
 docs/DEVELOPING.md
 docs/WHERE-IT-WORKS.md
 docs/CHATGPT.md
+docs/HERMES.md
 recipes/*.json
 report_keywords.json
 rm.py
