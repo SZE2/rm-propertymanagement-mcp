@@ -10,7 +10,7 @@ Tenant and financial data returned by the tools goes to your Hermes model provid
 5. Ask: "Using rentmanager, find a recipe for vacant units. Do not run it yet." Expect a `find_recipe` call naming `vacant_units`.
 
 ## Notes
-- `timeout: 180` is already set in the printed settings (large reports can take 20-40 s); the server throttles itself at 7 requests/s.
+- Large reports can take 20-40 s; the server throttles itself at 7 requests/s. The printed YAML sets `timeout: 180` per tool call; the CLI command keeps Hermes's default call timeout, which is longer. `hermes mcp add` starts the server once to discover its tools.
 - Hermes gives MCP child processes a filtered environment; the server reads `.env` from its own folder, so credentials never go into Hermes config.
 - PDFs from `report_pdf` are saved to `out/`; deliver them from a messaging chat with `MEDIA:<absolute path>`.
 - If the agent's file tools run in a Docker sandbox, mount `out/` read-only into the container so the agent can post-process saved results.

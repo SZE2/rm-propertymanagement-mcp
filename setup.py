@@ -201,7 +201,7 @@ def print_hermes_config():
     entry = hermes_entry()
     print("\nHermes Agent: local MCP registration (nothing was registered automatically).")
     print("  Option 1, CLI (add -p <profile> before 'mcp' to target a non-default profile):")
-    print("    hermes mcp add rentmanager --command %s --args %s" % (shell_arg(entry["command"]), shell_arg(entry["args"][0])))
+    print("    hermes mcp add rentmanager --command %s --connect-timeout %d --args %s" % (shell_arg(entry["command"]), entry["connect_timeout"], shell_arg(entry["args"][0])))
     print("  Option 2, config.yaml (back it up; merge under mcp_servers; keep other servers):")
     print(hermes_yaml())
     print("\n  Then restart Hermes (or the gateway) and run:  hermes mcp test rentmanager")
