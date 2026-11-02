@@ -11,6 +11,11 @@ Just ask. The server tells Claude its fast path:
 `resolve` turns property nicknames into IDs (`resolve('')` lists them) and finds tenants/units/owners/vendors by name.
 Every answer states its **Scope** (one property or all). Replies are size-capped (about 9,000 characters). A long result shows its first rows (only 10 when it has over 1,000 rows; set `show` to see more) and starts with a `MORE:` line with two ways to get the rest: `read_result(result_id, offset)` pages the full table as CSV through the MCP connection (works in every client, including ones that cannot see this computer's disk), or the saved file in `out/` (JSON + CSV) for agents whose file tools run on this computer. `RM_DELIVERY=mcp` hides the local paths (only `read_result` is offered), `RM_DELIVERY=file` offers only the path.
 
+## Date filters and missing dates
+`query` and `count` validate literal `null` values against the downloaded field types, including nested model paths. A `DateTime?` field can be absent in a returned row, but this does not make `EndDate,eq,null` a supported date filter: Rent Manager tries to parse the value as a date. These comparisons are rejected locally, including `ne` and null members of `in`, `ni` or `bt`. Use a real date such as `EndDate,ge,2026-01-01` instead.
+
+To inspect missing dates, keep other supported server filters to narrow the scope, include the date in `fields`, and use `query(..., fields='EndDate', where='EndDate,eq,')` (empty value) locally. Use `where='EndDate,ne,'` for present dates. Local checks cover **only fetched rows**: a `CAPPED` or `PARTIAL` result cannot establish a complete missing-date count. Do not silently drop the date condition or substitute a sentinel date. Non-date filters and fields without type metadata retain their existing behavior; the server does not guess a type from the field name.
+
 ## PDF reports
 `report_pdf(report, properties, parameters)` saves the built-in report as a PDF in `out/`, one file per property (all properties = one portfolio PDF), in parallel. Try: "PDF rent roll for Oak Court, Elm Park and Birch Lane". Read-only; if a report cannot render a PDF the reply says so and `run_report` gives the data instead.
 

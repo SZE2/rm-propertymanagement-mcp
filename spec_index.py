@@ -100,6 +100,29 @@ def model_info(model):
     return {"model": m[:-5], "fields": d.get("fields") or {}, "filters": d.get("filters") or [],
             "embeds": [e["Name"] for e in (d.get("embeds") or [])]}
 
+def field_type(model, field):
+    """Declared scalar type for a filter path, or None when metadata is missing.
+
+    Follow model references (including collection embeds); never infer a type from
+    a field name. Filter names alone carry no type or null-comparison semantics.
+    """
+    parts = field.split(".")
+    while model and parts:
+        mi = model_info(model)
+        if not mi: return None
+        fields = mi["fields"]
+        # Some specs describe dotted fields directly.
+        remaining = ".".join(parts)
+        if remaining in fields: return fields[remaining]
+        typ = fields.get(parts.pop(0))
+        if not isinstance(typ, str): return None
+        if typ.startswith("List<") and typ.endswith(">"):
+            typ = typ[5:-1]
+        if not typ.endswith("Model"): return None
+        model = typ
+    return None
+
+
 def _parse_methods(ctrl, methods):
     main, subs = None, {}
     for m in methods:

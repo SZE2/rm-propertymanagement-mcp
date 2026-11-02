@@ -1057,6 +1057,14 @@ def validate(model, fields="", embeds="", filters="", orderby=""):
         if op not in OPS:
             probs.append("filter op '%s' invalid. Use one of: %s" % (op, " ".join(sorted(OPS)))); continue
         if op in ("in", "ni", "bt") and not val.startswith("("): val = "(" + ",".join(split_items(val)) + ")"
+        typ = SI.field_type(model, f)
+        values = split_items(val[1:-1] if val.startswith("(") and val.endswith(")") else val) if op in ("in", "ni", "bt") else [val]
+        if str(typ).rstrip("?").lower() == "datetime" and any(v.strip("\"'").lower() == "null" for v in values):
+            probs.append("date filter '%s' (%s) cannot compare the literal null: Rent Manager parses filter values as DateTime, even for nullable fields. "
+                         "Use a real date (YYYY-MM-DD, e.g. %s,ge,2026-01-01), or query with fields='%s' and local where='%s,eq,' for missing dates "
+                         "(where='%s,ne,' for present dates). Keep other supported server filters to narrow the pull; local checks cover only fetched rows, "
+                         "so a CAPPED/PARTIAL result is not a complete missing-date count. Nothing was sent for this filter." % (f, typ, f, f, f, f))
+            continue
         filt.append("%s,%s,%s" % (f, op, val))
     local_sort, order = None, ""
     if orderby:
@@ -3211,9 +3219,9 @@ TOOLS = [
     ("enum_values", "Rent Manager: list the allowed values of an enum type (names that start with 'e', e.g. eLeasePeriod).",
      {"name": S("Enum name")}, ["name"], t_enum_values),
     ("count", "Rent Manager: fast record count (1 API call) for tenants, units, charges etc. Use before query to see how big a pull is.",
-     {"resource": S("e.g. Units, Tenants, Leases"), "filters": S("Field,op,value;Field2,op,value")}, ["resource"], t_count),
+     {"resource": S("e.g. Units, Tenants, Leases"), "filters": S("Field,op,value;Field2,op,value. DateTime filters require real dates, not literal null; use query with local where for missing dates.")}, ["resource"], t_count),
     ("query", "Rent Manager: live read-only query of one resource (tenants, units, leases, rent, transactions...) with validated filters/fields/embeds; can group/sum locally. BATCH ids in one call: UnitID,in,(1,2,3), never one call per unit/tenant. Saves JSON+CSV to out/.",
-     dict({"resource": S("Units | Tenants/123/Transactions | Tenants/123"), "filters": S("Field,op,value;... ops eq ne gt ge lt le in ni ct sw ew bt"),
+     dict({"resource": S("Units | Tenants/123/Transactions | Tenants/123"), "filters": S("Field,op,value;... ops eq ne gt ge lt le in ni ct sw ew bt. DateTime filters require real dates, not literal null; for missing dates include the field and use local where='EndDate,eq,' (only fetched rows)."),
            "fields": S("Comma list; dotted for embedded (Property.Name) - embeds are added automatically"),
            "embeds": S("Comma list of embeds"), "orderby": S("Field or -Field"), "max_records": I("Max rows (default 5000 = RM_MAX_ROWS; up to 20000). Newest rows are kept; a CAPPED line says what is missing"),
            "page_size": I("Optional page size"), "parallel": I("Parallel page requests (default 4)"), "save_as": S("Output file base name"),
