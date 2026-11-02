@@ -100,6 +100,26 @@ TIMING = ENV.get("RM_TIMING", "") not in ("", "0")
 
 DEFAULT_TIMEOUT = float(ENV.get("RM_TIMEOUT", "90"))
 
+class _APIOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Do not forward API GET headers outside their origin."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        def origin(url):
+            try:
+                u = urllib.parse.urlsplit(url)
+                if u.scheme.lower() not in ("http", "https") or not u.hostname or u.username is not None or u.password is not None:
+                    return None
+                port = u.port if u.port is not None else (443 if u.scheme.lower() == "https" else 80)
+                return (u.scheme.lower(), u.hostname.lower(), port)
+            except ValueError:
+                return None
+        source = origin(req.full_url)
+        if source is None or source != origin(urllib.parse.urljoin(req.full_url, newurl)):
+            fp.close()
+            raise RMError("API redirect to a different origin refused")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+_API_OPENER = urllib.request.build_opener(_APIOriginRedirect)
+
 def _req(method, path, headers=None, body=None, timeout=None, binary=False):
     # read-only guard: GET, plus the single login POST (the API requires POST to obtain a token)
     if not (method == "GET" or (method == "POST" and path == "/Authentication/AuthorizeUser")):
@@ -113,7 +133,8 @@ def _req(method, path, headers=None, body=None, timeout=None, binary=False):
     r = urllib.request.Request(BASE + path, data=data, headers=h, method=method)
     t0 = time.time()
     try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        open_request = _API_OPENER.open if method == "GET" else urllib.request.urlopen
+        with open_request(r, timeout=timeout) as resp:
             t1 = time.time()   # response headers received
             raw = resp.read()
             _TL.t = (t1 - t0, time.time() - t1, len(raw))

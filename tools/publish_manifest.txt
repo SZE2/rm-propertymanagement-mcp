@@ -40,6 +40,7 @@ tests/test_unit_item5gdb.py
 tests/test_unit_item5out.py
 tests/test_unit_pdf.py
 tests/test_unit_retry.py
+tests/test_unit_security.py
 tests/test_unit_v4.py
 tests/test_unit_v4args.py
 tests/test_unit_v5.py

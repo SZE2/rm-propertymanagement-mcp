@@ -22,7 +22,7 @@ class Timeout(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self, *a): return False
         def fake(r, timeout=None): seen.append(timeout); return Resp()
-        with mock.patch.dict(rm.ENV, {"RM_COMPANY": "x"}), mock.patch("urllib.request.urlopen", fake):
+        with mock.patch.dict(rm.ENV, {"RM_COMPANY": "x"}), mock.patch.object(rm._API_OPENER, "open", fake):
             rm._req("GET", "/a"); rm._req("GET", "/a", timeout=10)
         self.assertEqual(seen, [90.0, 10])
 
