@@ -280,6 +280,45 @@ class ToolSchema(unittest.TestCase):
 
 
 class Stdio(Base):
+    def test_cross_filesystem_guidance_and_paging(self):
+        """A client with a separate file namespace follows MCP, not the server path."""
+        rows = ROWS[:100]
+        jp, cp = server.save("Leases", rows, rows)
+        notice = server.deliver(rows, 40, jp, cp, rows)
+        self.assertIn("Use read_result unless you have confirmed a shared filesystem", notice)
+        self.assertIn("File: " + os.path.abspath(cp), notice)
+        rid = re.search(r"read_result\(result_id='([^']+)', offset=40\)", notice).group(1)
+        with tempfile.TemporaryDirectory() as client_root:
+            # Model an independent namespace: a server absolute path is not mounted there.
+            client_path = os.path.join(client_root, os.path.abspath(cp).lstrip(os.sep))
+            self.assertFalse(os.path.exists(client_path))
+            env = dict(os.environ, RM_OUT=self.tmp, RM_MCP_LOG="off")
+            p = subprocess.Popen([sys.executable, os.path.join(HERE, "server.py")], cwd=client_root, env=env,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            try:
+                def rpc(i, method, params):
+                    p.stdin.write((json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n").encode())
+                    p.stdin.flush()
+                    while True:
+                        result = json.loads(p.stdout.readline())
+                        if result.get("id") == i: return result["result"]
+                init = rpc(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}})
+                self.assertIn("unless a shared filesystem is confirmed", init["instructions"])
+                got, offset, request_id = [], 40, 2
+                while True:
+                    response = rpc(request_id, "tools/call", {"name": "read_result", "arguments": {"result_id": rid, "offset": offset, "max_chars": 1000}})
+                    self.assertFalse(response["isError"])
+                    lines = response["content"][0]["text"].splitlines()
+                    end = next(i for i, line in enumerate(lines) if line.startswith("END OF PAGE"))
+                    got.extend(csv.DictReader(io.StringIO("\n".join(lines[1:end]))))
+                    match = re.search(r"offset=(\d+)", lines[end])
+                    if not match: break
+                    offset = int(match.group(1)); request_id += 1
+                self.assertEqual([int(row["LeaseID"]) for row in got], list(range(40, 100)))
+                self.assertIn("All 100 rows delivered.", lines[end])
+            finally:
+                p.stdin.close(); p.wait(10); p.stdout.close()
+
     def test_read_result_over_real_stdio(self):
         """The MCP path a remote client uses: no file access, only tools/call."""
         jp, cp = server.save("Leases", ROWS, ROWS)
