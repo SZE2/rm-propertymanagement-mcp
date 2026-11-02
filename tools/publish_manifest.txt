@@ -49,7 +49,6 @@ tests/test_unit_v9.py
 tests/test_unit_v10.py
 tests/test_unit_v11.py
 tests/test_unit_v12.py
-tests/test_unit_udf_discovery.py
 tests/test_unit_delivery.py
 tools/make_issue.py
 tools/make_public_tree.py
