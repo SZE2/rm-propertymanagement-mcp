@@ -1344,10 +1344,18 @@ def check_fanout(r, pages, allow):
 
 _ID_SCOPE = re.compile(r"(?:^|;)\s*((?:Unit|Tenant|Lease|LeaseRenewal|Owner|Vendor|EntityKey|ParentLease)ID|Unit\.UnitID|Tenant\.TenantID)\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", re.I)
 
-def scope_from_filters(filters):
+def _id_key(r):
+    """The resource model's own ID field (its first field, e.g. ProspectID), or None."""
+    mi = SI.model_info(r["model"]) if r.get("model") else None
+    return next(iter((mi or {}).get("fields") or {}), None)
+
+def scope_from_filters(filters, key=None):
+    """key: the queried resource's own ID field (e.g. ProspectID); filtering on it also narrows the scope to specific records."""
     m = re.search(r"(?:^|;)\s*PropertyID\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", filters or "", re.I)
     if not m:
         m2 = _ID_SCOPE.search(filters or "")
+        if not m2 and key and re.fullmatch(r"\w+ID", key) and key.lower() != "propertyid":
+            m2 = re.search(r"(?:^|;)\s*(%s)\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?" % key, filters or "", re.I)
         if not m2: return None
         ids = re.findall(r"\d+", m2.group(3))
         shown = ",".join(ids[:8]) + (",... (%d ids)" % len(ids) if len(ids) > 8 else "")
@@ -1470,7 +1478,7 @@ def t_count(resource, filters=""):
     if s == 204: n = 0
     elif s != 200: raise ToolError(api_error(s, d))
     else: n = int(h.get("x-total-results") or (len(d) if isinstance(d, list) else 1))
-    scope = scope_from_filters(flt) or all_scope_label()
+    scope = scope_from_filters(flt, key) or all_scope_label()
     return "count %s%s = %d\nScope: %s\n(%.1fs, live)" % (r["path"], " where " + flt if flt else "", n, scope, time.time() - t0)
 
 def _d10(v):
@@ -1728,7 +1736,7 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
     if (first_per or lsort) and not mrf_col and not summary and total > nrec and not got_newest:
         pre_notes.append("INCOMPLETE: %s applied to only %d of %d rows (max_records cap): raise max_records or add filters" % ("first_per" if first_per else "descending sort", nrec, total))
     notes = pre_notes + notes
-    scope = _scope or scope_from_filters(flt) or ("record %s" % r["id"] if r["id"] else all_scope_label())
+    scope = _scope or scope_from_filters(flt, _id_key(r)) or ("record %s" % r["id"] if r["id"] else all_scope_label())
     head = "%s: %d of %d record(s)%s. Scope: %s" % (
         r["path"], nrec, total, "; " + "; ".join(notes) if notes else "", scope)
     if r.get("status") == 204 and not flat:
