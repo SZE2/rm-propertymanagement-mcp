@@ -3349,25 +3349,30 @@ def send(msg):
 _loglock = threading.Lock()
 LOG_MAX_BYTES = 5 * 1024 * 1024
 _LOG_PII = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b|\b\d{3}-\d{2}-\d{4}\b|\b\d{9,}\b")
+_LOG_URL = re.compile(r"https?://[^\s<>\"']+", re.I)
+# Encoded text may conceal any part of a URL, including its scheme.
+_LOG_ENCODED_URL = re.compile(r"https?(?::|%3a)(?:/|%2f){2}|%[0-9a-f]{2}", re.I)
 
 def log_mask(o):
     """Call-log masking, always on (independent of RM_MASK_PII): emails, phone numbers and long digit runs (SSN/account numbers)
-    become [masked]; PII-named keys (phone, email, ssn...) are masked entirely."""
-    if isinstance(o, dict): return {k: ("[masked]" if pii_key(k) and v not in (None, "", 0) else log_mask(v)) for k, v in o.items()}
+    become [masked]; URLs and PII-named keys (phone, email, ssn...) are masked entirely."""
+    if isinstance(o, dict): return {log_mask(k): ("[masked]" if (pii_key(k) or str(k).lower() == "download_url") and v not in (None, "", 0) else log_mask(v)) for k, v in o.items()}
     if isinstance(o, list): return [log_mask(v) for v in o]
-    if isinstance(o, str): return _LOG_PII.sub("[masked]", o)
+    if isinstance(o, str):
+        if _LOG_ENCODED_URL.search(o): return "[masked]"
+        return _LOG_PII.sub("[masked]", _LOG_URL.sub("[masked]", o))
     return o
 
 def call_log(tool, args, secs, err, chars, head=""):
     """One JSON line per tools/call in local/mcp_calls.jsonl (gitignored); RM_MCP_LOG=path overrides, RM_MCP_LOG=off disables.
-    Args only (never env/credentials; emails/phones/long digit runs masked) plus the first 300 chars of an error (masked too).
+    Args only (never env/credentials; URLs, emails/phones/long digit runs masked) plus the first 300 chars of an error (masked too).
     The file rotates at 5 MB to <name>.1.jsonl (one backup). Never raises."""
     path = os.environ.get("RM_MCP_LOG")
     if path is None: path = os.path.join(rm.HERE, "local", "mcp_calls.jsonl")
     if path.lower() in ("", "off", "0", "false"): return
     try:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": tool, "args": log_mask(mask_args(args)), "secs": round(secs, 3),
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": log_mask(tool), "args": log_mask(mask_args(args)), "secs": round(secs, 3),
                "isError": bool(err), "chars": chars}
         if err: rec["error"] = log_mask(head[:300])
         line = json.dumps(rec, ensure_ascii=False, default=str)
@@ -3403,9 +3408,9 @@ def handle(msg):
             except ToolError as e:
                 text, err = "ERROR: %s" % e, True
             except Exception as e:  # never crash the server; no secrets in tracebacks (rm never logs creds)
-                traceback.print_exc(file=sys.stderr)
+                sys.stderr.write(log_mask(traceback.format_exc()))
                 text, err = "ERROR (internal): %s: %s" % (type(e).__name__, e), True
-            sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else ""))
+            sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (log_mask(params.get("name")), time.time() - t0, " ERR" if err else ""))
             call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err else "")
             result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
         elif method in ("resources/list", "prompts/list"):

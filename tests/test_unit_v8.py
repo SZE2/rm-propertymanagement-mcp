@@ -187,7 +187,8 @@ class ReadOnlyGuard(unittest.TestCase):
             with self.assertRaises(rm.RMError, msg=m + p): rm._req(m, p)
 
     def test_allowed_methods_pass_the_guard(self):
-        with mock.patch.object(rm.urllib.request, "urlopen", side_effect=RuntimeError("net")), mock.patch.dict(rm.ENV, {"RM_COMPANY": "x"}):
+        with mock.patch.object(rm._API_OPENER, "open", side_effect=RuntimeError("net")), \
+             mock.patch.object(rm.urllib.request, "urlopen", side_effect=RuntimeError("net")), mock.patch.dict(rm.ENV, {"RM_COMPANY": "x"}):
             for m, p in [("GET", "/Tenants"), ("POST", "/Authentication/AuthorizeUser")]:
                 with self.assertRaises(RuntimeError): rm._req(m, p)
 
