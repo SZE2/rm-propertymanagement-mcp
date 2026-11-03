@@ -382,7 +382,7 @@ def _fmt(v, width=40):
 
 _END_DATE = re.compile(r"(moveout|todate|enddate|expir|thru|enddt|end_date|lease_?end)", re.I)
 
-def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, sort=None, top=None, where=None, running=None, newest_first=None, first_per=None):
+def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, sort=None, top=None, where=None, running=None, newest_first=None, first_per=None, count_distinct=None):
     """rows: list of flat dicts. Returns (rows, total_row, notes)."""
     notes = []
     allk = []
@@ -410,18 +410,31 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
     if group_by:
         gcols = [g.strip() for g in group_by.split(",") if g.strip()]
         scols = [s.strip() for s in (sum_cols or "").split(",") if s.strip()]
+        dcol = (count_distinct or "").strip()
+        dname = "distinct_" + dcol
         if rows:
-            for c in gcols + scols:
+            for c in gcols + scols + ([dcol] if dcol else []):
                 if c not in rows[0]:
                     raise ToolError("Unknown column '%s'. Did you mean: %s" % (c, ", ".join(suggest(c, rows[0].keys()))))
-        groups = {}
+        groups, seen, allseen, nokey = {}, {}, set(), 0
         for r in rows:
             k = tuple(r.get(g) for g in gcols)
-            g = groups.setdefault(k, dict(zip(gcols, k), count=0, **{s: 0.0 for s in scols}))
+            g = groups.setdefault(k, dict(zip(gcols, k), count=0, **({dname: 0} if dcol else {}), **{s: 0.0 for s in scols}))
             g["count"] += 1
+            if dcol:
+                dv = r.get(dcol)
+                if dv in (None, ""): nokey += 1
+                elif dv not in seen.setdefault(k, set()):
+                    seen[k].add(dv); allseen.add(dv); g[dname] += 1
             for s in scols: g[s] += _num(r.get(s)) or 0.0
         total = dict({gcols[0]: "TOTAL"}, count=sum(g["count"] for g in groups.values()),
+                     **({dname: len(allseen)} if dcol else {}),
                      **{s: round(sum(g[s] for g in groups.values()), 2) for s in scols})
+        blank = sum(g["count"] for kk, g in groups.items() if all(v in (None, "") for v in kk))
+        if blank: notes.append("%d row(s) have an empty %s (shown as a blank group)" % (blank, group_by))
+        if dcol:
+            notes.append("%s = distinct non-empty %s per group; TOTAL counts each %s once even if it is in several groups%s"
+                         % (dname, dcol, dcol, "; %d row(s) without a %s not counted" % (nokey, dcol) if nokey else ""))
         rows = list(groups.values())
         for r in rows:
             for s in scols: r[s] = round(r[s], 2)
@@ -429,6 +442,10 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
         notes.append("grouped by %s" % group_by)
     else:
         total = None
+        if count_distinct and rows:
+            dcol = count_distinct.strip()
+            if dcol not in rows[0]: raise ToolError("count_distinct: unknown column '%s'. Did you mean: %s" % (dcol, ", ".join(suggest(dcol, rows[0].keys()))))
+            notes.append("%d distinct non-empty %s in %d row(s)" % (len({r.get(dcol) for r in rows} - {None, ""}), dcol, len(rows)))
         if sum_cols and rows:
             scols = [s.strip() for s in sum_cols.split(",") if s.strip()]
             for c in scols:
@@ -1595,7 +1612,7 @@ def t_query(resource, filters="", **kw):
 
 def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size=0, max_records=0, parallel=4,
             columns="", group_by="", sum="", sort="", top=0, where="", show=0, save_as="", allow_fanout=False,
-            most_recent_first=False, first_per="", summary="", as_of="", _scope=None):
+            most_recent_first=False, first_per="", summary="", as_of="", count_distinct="", _scope=None):
     t0 = time.time()
     r = find_resource(resource)
     if r.get("model") == "Lease" and not r.get("sub") and not fields and not summary and not group_by and not columns:
@@ -1683,7 +1700,7 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
             summ = summarize_rent(flat, as_of, sts, sinfo)
         else:
             summ = summarize_ledger(flat)
-        shown, tot, notes = post_process(summ, columns, None, group_by, sum, sort, top, where, first_per=first_per or None)
+        shown, tot, notes = post_process(summ, columns, None, group_by, sum, sort, top, where, first_per=first_per or None, count_distinct=count_distinct or None)
         notes.insert(0, "summary=%s of %d row(s)%s" % (summary, len(flat), "; total_rent = tenant_portion + subsidy_portion (subsidy IS rent)" if summary == "rent" else ""))
         if total > nrec: notes.insert(1, "PARTIAL: only %d of %d source rows were read, so the summary is incomplete (add filters)" % (nrec, total))
         if summary == "rent":
@@ -1695,7 +1712,7 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
         jp, cp = save(save_as or r["path"].strip("/").replace("/", "_") + "_summary", raw, summ)
     else:
         shown, tot, notes = post_process(flat, columns, None, group_by, sum, sort, top, where, first_per=first_per or None,
-                                         newest_first=mrf_col if (mrf_col and not sort and not group_by) else None)
+                                         count_distinct=count_distinct or None, newest_first=mrf_col if (mrf_col and not sort and not group_by) else None)
         jp, cp = save(save_as or r["path"].strip("/").replace("/", "_"), raw, flat)
     if (first_per or lsort) and not mrf_col and not summary and total > nrec and not got_newest:
         pre_notes.append("INCOMPLETE: %s applied to only %d of %d rows (max_records cap): raise max_records or add filters" % ("first_per" if first_per else "descending sort", nrec, total))
@@ -3237,6 +3254,7 @@ TOOLS = [
            "allow_fanout": B("Only if the user insists: lift the per-record call budget (prefer a report or one bulk query)"),
            "most_recent_first": B("Newest rows first by the date column (keeps the NEWEST rows; use for ledgers/leases)"),
            "first_per": S("After sorting keep only the first row per this column, e.g. orderby=-MoveOutDate + first_per=UnitID = newest lease per unit"),
+           "count_distinct": S("With group_by: also count distinct values of this column per group, e.g. UnitID = units, not rows, when an embed repeats a unit"),
            "summary": S("rent (on RecurringCharges: tenant+subsidy portions and total per tenant) | ledger (on Tenants/{id}/Transactions: last rent charge, last payment, balance)"),
            "as_of": S("With summary=rent: rent in effect on this date (default: latest per tenant)")}, **POST),
      ["resource"], t_query),
