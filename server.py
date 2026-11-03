@@ -961,7 +961,12 @@ def find_resource(path):
         sd = r["subs"][sub]
         out.update(sub=sub, model=sd.get("model"), list=sd.get("multi", False), sub_all=out["id"] is None)
         if out["id"] is None and not sd.get("all"):
-            raise ToolError("%s/%s needs an ID: use %s/{id}/%s" % (ctrl, sub, ctrl, sub))
+            pmi = SI.model_info(r.get("model")) if r.get("model") else None
+            alt = ""
+            if pmi and sub in (pmi.get("embeds") or []):
+                alt = (" or, for several %s in ONE call, query resource='%s' with embeds='%s' (or fields='%s.<field>')"
+                       " and a filter on %s; one line per child row" % (ctrl, ctrl, sub, sub, ctrl))
+            raise ToolError("%s/%s needs an ID: use %s/{id}/%s%s" % (ctrl, sub, ctrl, sub, alt))
         if out["id"] is not None and not sd.get("by_id"):
             raise ToolError("%s/%s does not take an ID: use %s/%s" % (ctrl, sub, ctrl, sub))
     out["path"] = "/" + "/".join([ctrl] + ([out["id"]] if out["id"] else []) + ([out["sub"]] if out["sub"] else []))

@@ -52,7 +52,7 @@
   {
    "id": "move_out",
    "words": ["move out", "move-out", "moveout", "moved out", "notice", "vacated", "move in", "move-in"],
-   "pointer": "Move dates live on Leases: MoveInDate, MoveOutDate, ExpectedMoveOutDate, NoticeDate (not on Tenants or Units). Recipes move_ins / move_outs cover a date range.",
+   "pointer": "Move dates live on Leases: MoveInDate, MoveOutDate, ExpectedMoveOutDate, NoticeDate (not on Tenants or Units). Recipes move_ins / move_outs cover a date range. A prospect who reserved a unit but has not moved in has no lease yet: see Prospects (ReservedUnitID, ReservedUnit, MoveInDate, ReservedMoveIn, CurrentProspectStage; stage history via the ProspectStageHistory embed). Report each date under its own field name; the spec does not define how they differ.",
    "on_models": ["Leases"],
    "resources": ["Leases"],
    "recipes": ["move_outs", "move_ins"]
