@@ -822,6 +822,8 @@ def _norm(s): return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
 
 CONFIDENT = 60   # best score below this = 'no confident match' (never guess)
 _STOP = {"llc", "inc", "corp", "co", "ltd", "lp", "llp", "the", "of", "and", "at", "properties", "realty"}
+_GENERIC = _STOP | {"property", "apartments", "apartment", "apts", "apt", "condos", "condo", "condominium", "condominiums",
+                    "building", "bldg", "complex", "residences"}
 # field label -> score penalty: name/short/alias > billing name > address > owner name; small so a substring hit stays >= CONFIDENT
 _TIERS = {"name": 0, "short name": 0, "alias": 0, "billing name": 2, "address": 4, "owner": 6}
 
@@ -830,7 +832,10 @@ def _score(term_n, nn, loose):
     if not nn: return 0
     if loose and not (set(term_n.split()) - _STOP): return 0   # only legal-suffix words (LLC, Inc...): not a name
     if term_n == nn: return 100
-    if nn.startswith(term_n) or term_n.startswith(nn): return 80
+    if nn.startswith(term_n): return 80
+    # A longer term that only begins with a name ('Alder Commons' vs short name 'Alder') is a different
+    # property unless the extra words are generic ('Oak Court Apartments'); score it by shared words instead.
+    if term_n.startswith(nn) and not (set(term_n[len(nn):].split()) - _GENERIC): return 80
     if term_n in nn: return 70
     tw, nw = set(term_n.split()), set(nn.split())
     if loose: tw -= _STOP; nw -= _STOP
