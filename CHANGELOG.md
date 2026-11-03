@@ -7,6 +7,7 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+- Fixed: property name matching no longer treats a longer name that only begins with another property's name or short name (for example "Alder Commons" when only "Alder Terrace", short name "Alder", exists) as a confident match. Such a name is now scored by shared words, so `resolve` reports no confident match and tools taking a `property` parameter ask which property instead of silently using the wrong one. Generic trailing words such as "Apartments" or "Condos" still match.
 - Added: `query` takes `count_distinct` (for example `UnitID`). With `group_by`, each group also gets a `distinct_<column>` count, so a unit repeated by a one-to-many embed (such as custom-field values) is counted once; the TOTAL counts each value once across groups, and rows without that column are reported. A grouped result now also notes how many rows have an empty group value. Results without the new option are unchanged apart from that note.
 - Fixed: `query` and `count` reject literal `null` comparisons on schema-declared DateTime filters before any API request, with real-date and local missing-date guidance. Non-date and unknown-type filters are unchanged.
 - Added: Hermes Agent setup guide `docs/HERMES.md` and `setup.py --print-hermes-config` (exact `hermes mcp add` command and `config.yaml` entry; no credentials or app settings are changed).
