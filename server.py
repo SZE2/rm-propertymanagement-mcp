@@ -2545,7 +2545,11 @@ def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None, ext=None
     al = post.get("also")
     def_notes = []
     if al and str(vals.get("as_of_is_today")) == "True":   # reserved/held units are physically vacant; only knowable for today
-        flat += _also_rows(r, qd, al, vals, flat)
+        added = _also_rows(r, qd, al, vals, flat)
+        flat += added
+        if added:   # keep "N of TOTAL" consistent: the second fetch's rows are part of the result, not extra beyond the total
+            total += len(added)
+            def_notes.append("includes %d reserved/held unit(s) that the strict vacancy filter leaves out" % len(added))
     elif al:   # past date: only the strict filter exists. Say so, with how many units today's definition would add (no silent switch)
         try:
             extra = len(_also_rows(r, qd, al, vals, flat))
