@@ -1351,7 +1351,9 @@ def _id_key(r):
 
 def scope_from_filters(filters, key=None):
     """key: the queried resource's own ID field (e.g. ProspectID); filtering on it also narrows the scope to specific records."""
-    m = re.search(r"(?:^|;)\s*PropertyID\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", filters or "", re.I)
+    m = re.search(r"(?:^|;)\s*()PropertyID\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", filters or "", re.I)
+    if not m:   # another property-ID field, e.g. FinancialPropertyID on Assets or Unit.PropertyID
+        m = re.search(r"(?:^|;)\s*([\w.]*PropertyID)\s*,\s*(eq|in)\s*,\s*\(?([\d,\s]+)\)?", filters or "", re.I)
     if not m:
         m2 = _ID_SCOPE.search(filters or "")
         if not m2 and key and re.fullmatch(r"\w+ID", key) and key.lower() != "propertyid":
@@ -1360,12 +1362,13 @@ def scope_from_filters(filters, key=None):
         ids = re.findall(r"\d+", m2.group(3))
         shown = ",".join(ids[:8]) + (",... (%d ids)" % len(ids) if len(ids) > 8 else "")
         return "filtered by %s in (%s) (not the whole portfolio)" % (m2.group(1), shown)
-    ids = [int(x) for x in re.findall(r"\d+", m.group(2))]
+    ids = [int(x) for x in re.findall(r"\d+", m.group(3))]
+    via = " (filtered by %s)" % m.group(1) if m.group(1) else ""
     try:
         names = {p["id"]: p["name"] for p in properties()}
     except ToolError:
         names = {}
-    return "Property: " + ", ".join("%s (ID %d)" % (names.get(i, "?"), i) for i in ids)
+    return "Property: " + ", ".join("%s (ID %d)" % (names.get(i, "?"), i) for i in ids) + via
 
 # ----------------------------------------------------------------------------- tools
 def t_search_models(query, limit=8):
