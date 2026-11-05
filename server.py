@@ -424,7 +424,7 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
             if before and not rows and op in ("eq", "ct") and _num(val) is None:
                 near = _near_values(val, (r.get(col) for r in before))
                 miss.append("where %s,%s,%s matched none of %d row(s)%s" % (col, op, val, len(before),
-                            "; closest %s values: %s" % (col, ", ".join(near)) if near else ""))
+                            "; closest %s values: %s" % (col, ", ".join(_fmt(x, 60) for x in near)) if near else ""))
         notes.append("where %s" % where)
         notes += miss
     if rename:
