@@ -7,6 +7,7 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+- Fixed: a `query` or `count` filtered by another property-ID field (for example `FinancialPropertyID,in,(...)` on `Assets`, or `Unit.PropertyID,eq,...`) now reports `Scope: Property: <names> (filtered by FinancialPropertyID)` instead of "All properties the API user can see", so an empty result is no longer presented as portfolio-wide. Filters on `PropertyID` itself are labelled as before.
 - Fixed: `vacant_units` and `vacancy_by_property` for today no longer report more rows than the total (for example "12 of 10 record(s)"). Units reserved by a prospect or on a status hold, which a second request adds, now count in the total, and the line says how many were added. Past dates and results without such units are unchanged.
 - Fixed: a `query` or `count` filtered by the resource's own ID field (for example `ProspectID,in,(...)` on `Prospects`) now reports `Scope: filtered by ProspectID in (...) (not the whole portfolio)` instead of "All properties the API user can see". Other filters are labelled as before.
 - Changed: the move-in/move-out data pointer (shown by `find_recipe` and `search_models`) now notes that a prospect who reserved a unit but has not moved in has no lease yet, and points to the Prospects fields (`ReservedUnitID`, `ReservedUnit`, `MoveInDate`, `ReservedMoveIn`, `CurrentProspectStage`, and the `ProspectStageHistory` embed). It does not claim how those dates differ.
