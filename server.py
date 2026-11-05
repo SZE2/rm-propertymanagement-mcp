@@ -2325,6 +2325,20 @@ def parse_basis(v):
     if t in ("accrual", "1"): return 1, "Accrual"
     raise ToolError("basis must be Cash or Accrual, e.g. params={'basis': 'Accrual'}")
 
+def _sent_basis_label(spec, req, rp, label):
+    """Basis label for what is actually sent: report_params may override the report key a basis param fills (e.g. 'Basis,1')."""
+    for pname, p in spec.items():
+        if p.get("type") != "basis": continue
+        tok = "{%s}" % pname
+        for key, tmpl in (req.get("parameters") or {}).items():
+            if not (isinstance(tmpl, str) and tok in tmpl): continue
+            sent = [str(v) for k, v in rp.items() if k.lower() == key.lower()]
+            if not sent: continue
+            sent = ([v for v in sent if v.strip()] or [""])[-1]   # empty is not sent: Rent Manager default
+            try: return parse_basis(sent)[1]
+            except ToolError: return "%s=%s (as sent)" % (key, sent)
+    return label
+
 def _param_num(v, pname, name):
     try: return float(str(v).replace("$", "").replace(",", "").strip())
     except ValueError: raise ToolError("Param '%s' must be a number, got '%s'. e.g. run_recipe(name='%s', params={'%s': 100})" % (pname, v, name, pname))
@@ -2394,6 +2408,7 @@ def run_recipe_result(name, params=None, all_properties=False, show=0):
         rp = {k: v for k, v in rp.items() if v is not None}
         if vals.get("report_params") not in (None, ""):   # any other report option, validated against the report's parameter list
             rp.update(build_report_params(report_by(recipe_report(req)), vals["report_params"]))
+            basis_label = _sent_basis_label(spec, req, rp, basis_label)
         pre = None
         pkeys = [k for k, v in (req.get("parameters") or {}).items() if isinstance(v, str) and "{property}" in v]
         if int(r.get("chunks") or 1) > 1 and not prop_ids and req.get("grid") and len(pkeys) == 1 and pkeys[0] not in rp:
