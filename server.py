@@ -380,6 +380,21 @@ def _fmt(v, width=40):
     s = s.replace("\n", " ").replace("|", "/")
     return s if len(s) <= width else s[: width - 1] + "~"
 
+def _near_values(val, values, n=5, cap=5000):
+    """Distinct column values close to a where value that matched nothing: same text ignoring case/spaces/punctuation first,
+    then fuzzy matches. Empty when the column has too many distinct values to be useful."""
+    seen, have = [], set()
+    for v in values:
+        if v is None or isinstance(v, (dict, list)) or v == "": continue
+        s = str(v)
+        if s not in have:
+            have.add(s); seen.append(s)
+            if len(seen) > cap: return []
+    squash = lambda s: re.sub(r"[\W_]+", "", s.lower())
+    key = squash(val)
+    same = [s for s in seen if key and (squash(s) == key or key in squash(s))][:n]
+    return same + [s for s in suggest(val, seen, n) if s not in same][: n - len(same)]
+
 _END_DATE = re.compile(r"(moveout|todate|enddate|expir|thru|enddt|end_date|lease_?end)", re.I)
 
 def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, sort=None, top=None, where=None, running=None, newest_first=None, first_per=None, count_distinct=None):
@@ -391,6 +406,7 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
             if k not in allk: allk.append(k)
     rows = [r if len(r) == len(allk) else {k: r.get(k) for k in allk} for r in rows]  # same keys on every row
     if where:
+        miss = []   # text clauses that removed every row: say so and show close values (e.g. 'FixedAsset' vs 'Fixed Asset')
         for clause in [w for w in where.split(";") if w.strip()]:
             parts = clause.split(",", 2)
             if len(parts) != 3: raise ToolError("where must be 'Column,op,value' (ops eq ne gt ge lt le ct)")
@@ -403,8 +419,14 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
                 if na is not None and nv is not None: a, b = na, nv
                 else: a, b = ("" if a is None else str(a)).lower(), val.lower()
                 return {"eq": a == b, "ne": a != b, "gt": a > b, "ge": a >= b, "lt": a < b, "le": a <= b}.get(op, True)
+            before = rows
             rows = [r for r in rows if ok(r)]
+            if before and not rows and op in ("eq", "ct") and _num(val) is None:
+                near = _near_values(val, (r.get(col) for r in before))
+                miss.append("where %s,%s,%s matched none of %d row(s)%s" % (col, op, val, len(before),
+                            "; closest %s values: %s" % (col, ", ".join(near)) if near else ""))
         notes.append("where %s" % where)
+        notes += miss
     if rename:
         rows = [{rename.get(k, k): v for k, v in r.items()} for r in rows]
     if group_by:
