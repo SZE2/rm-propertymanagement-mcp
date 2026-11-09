@@ -2148,11 +2148,13 @@ def _run_report(rep, parameters, property, grid, columns, rename, group_by, sum,
     d, q = _pre if _pre is not None else run_report_raw(rep, params)
     # a direct call starts with every effective parameter (what was sent, defaults marked); the raw query line is for recipes
     lead = [params_used(rep, params), report_reminder(rep)] if direct else []
-    info = [param_block(rep)] if first else []   # first use of this report: its whole parameter list
+    # first use of this report: its whole parameter list, built only once nothing can fail (building it marks the list as
+    # shown, and a failed call must still get the list from with_params)
+    info = lambda: [param_block(rep)] if first else []
     g = grids(d)
     if not g:
         return "\n".join(lead + ["Report %s returned no data.\nScope: %s" % (rep["name"], scope or "n/a")] + ([] if direct else ["Parameters: %s" % (q or "(defaults)")])
-                         + info + ["(%.1fs, live)" % (time.time() - t0)])
+                         + info() + ["(%.1fs, live)" % (time.time() - t0)])
     flat_all = {k: [flatten(r) for r in v] for k, v in g.items()}
     gname = grid or max(flat_all, key=lambda k: len(flat_all[k]))
     if gname not in flat_all: raise ToolError("No grid '%s'. Grids: %s" % (gname, ", ".join(flat_all)))
@@ -2163,7 +2165,7 @@ def _run_report(rep, parameters, property, grid, columns, rename, group_by, sum,
     jp, cp = save(save_as or _label or rep["name"], d, main)
     out = lead + ["Report %s (id %s): %s has %d row(s)%s. Scope: %s" % (rep["name"], rep["id"], gname, len(main), "; " + "; ".join(notes) if notes else "", scope or "n/a")]
     if not direct: out.append("Parameters: %s" % (q or "(defaults)"))
-    out += info
+    out += info()
     others = ["%s(%d rows)" % (k, len(v)) for k, v in flat_all.items() if k != gname]
     if others: out.append("Other grids: %s (pass grid=...)" % ", ".join(others))
     small = [k for k, v in flat_all.items() if k != gname and 0 < len(v) <= 5 and not opts.get("no_small_grids")]
