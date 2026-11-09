@@ -2255,7 +2255,9 @@ def _report_pdf(rep, properties, parameters, save_as):
         res = list(ex.map(one, jobs))
     head = "Report %s (id %s) as PDF: %d of %d saved." % (rep["name"], rep["id"], sum(1 for r in res if r[1]), len(res))
     # every effective parameter first; with properties= each PDF gets its own property IDs (named on the Scope line)
-    used = params_used(rep, dict(base, **{pk: "one PDF per property (see Scope)"}) if items else base)
+    sent = dict(base)
+    if items and pk: sent[pk] = "one PDF per property (see Scope)"
+    used = params_used(rep, sent)
     tail = "Scope: %s\n(%.1fs, live)" % (scope, time.time() - t0)
     if any(r[1] for r in res): tail += "\n" + FILE_HINT
     if not any(r[1] for r in res): tail += "\nNo PDF was produced; use run_report for this report's data instead."
