@@ -46,10 +46,11 @@ class ToolError(Exception):
     pass
 
 class NotRun(ToolError):
-    """A call mistake caught before anything was sent to Rent Manager (unknown recipe or report, bad report parameter,
-    bad recipe param value). The MCP reply is a normal result that starts with 'NOT RUN:' (isError false): some clients
-    pause the whole server after a few error results, and a wrong name or argument should not cause that.
-    Rent Manager, network, login and other real failures stay ToolError (isError true)."""
+    """A caller mistake caught before the report or recipe runs (unknown recipe or report, bad report parameter key,
+    bad recipe param value; a property lookup may already have been made). The MCP reply is a normal result that starts
+    with 'NOT RUN:' (isError false): some clients pause the whole server after a few error results, and a wrong name or
+    argument should not cause that. Rent Manager, network, login and other real failures stay ToolError (isError true),
+    and so does a recipe whose own report or parameters do not exist on this Rent Manager."""
 
 def _today():
     return datetime.date.today()
@@ -2162,7 +2163,7 @@ def report_call(rep, args=None):
     if asof not in (None, "") and "asofdate" in keys: pars.append("%s,%s" % (keys["asofdate"], asof))
     prop = a.get("property")
     if not pars and prop in (None, ""): return _ready_call(rep)
-    pp = (", property='%s'" % prop if prop not in (None, "") else ", property='...'") if _prop_param(rep) else ""
+    pp = (", property=%r" % str(prop) if prop not in (None, "") else ", property='...'") if _prop_param(rep) else ""
     return "run_report(id='%s'%s%s)" % (rep["id"], ", parameters='%s'" % ";".join(pars) if pars else "", pp)
 
 def _recipe_key(n):
@@ -2478,19 +2479,24 @@ def run_recipe_result(name, params=None, all_properties=False, show=0):
         rp = {k: _fill(v, vals) for k, v in (req.get("parameters") or {}).items()}
         rp = {k: v for k, v in rp.items() if v is not None}
         if vals.get("report_params") not in (None, ""):   # any other report option, validated against the report's parameter list
-            rp.update(build_report_params(report_by(recipe_report(req)), vals["report_params"]))
+            try: rep = report_by(recipe_report(req))
+            except NotRun as e: raise ToolError("Recipe %s cannot run its report on this Rent Manager: %s" % (r["name"], e))   # not the caller's mistake
+            rp.update(build_report_params(rep, vals["report_params"]))   # the caller's own options: a mistake here is NOT RUN
             basis_label = _sent_basis_label(spec, req, rp, basis_label)
         pre = None
         pkeys = [k for k, v in (req.get("parameters") or {}).items() if isinstance(v, str) and "{property}" in v]
-        if int(r.get("chunks") or 1) > 1 and not prop_ids and req.get("grid") and len(pkeys) == 1 and pkeys[0] not in rp:
-            try: props = properties(live=True)   # v4 1a: never the alias file; on failure run unchunked
-            except ToolError: props = []
-            chunks = split_chunks(props, r["chunks"])
-            if len(chunks) > 1:   # portfolio-wide run: split the property list (2b)
-                rep = report_by(recipe_report(req))
-                pre = run_report_chunked(rep, build_report_params(rep, rp), _prop_param(rep) or pkeys[0], chunks, req["grid"])
-        res = t_run_report(recipe_report(req), rp, property="", all_properties=True, grid=req.get("grid", ""),
-                           rename=post.get("rename"), save_as=name, _opts=opts, _pre=pre, **common)
+        try:   # from here a NotRun comes from the recipe's own report parameters, not from the caller: a real error
+            if int(r.get("chunks") or 1) > 1 and not prop_ids and req.get("grid") and len(pkeys) == 1 and pkeys[0] not in rp:
+                try: props = properties(live=True)   # v4 1a: never the alias file; on failure run unchunked
+                except ToolError: props = []
+                chunks = split_chunks(props, r["chunks"])
+                if len(chunks) > 1:   # portfolio-wide run: split the property list (2b)
+                    rep = report_by(recipe_report(req))
+                    pre = run_report_chunked(rep, build_report_params(rep, rp), _prop_param(rep) or pkeys[0], chunks, req["grid"])
+            res = t_run_report(recipe_report(req), rp, property="", all_properties=True, grid=req.get("grid", ""),
+                               rename=post.get("rename"), save_as=name, _opts=opts, _pre=pre, **common)
+        except NotRun as e:
+            raise ToolError("Recipe %s cannot run its report on this Rent Manager: %s" % (r["name"], e))
         sc_line = "Scope: " + scope.replace("\\", "/") + ("\nBasis: " + basis_label if basis_label else "")
         res = re.sub(r"Scope: [^\n]*", lambda m: sc_line, res, count=1)
     else:
