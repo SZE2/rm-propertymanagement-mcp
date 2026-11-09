@@ -102,6 +102,7 @@ def scrub_call(rec, terms=()):
     args = rec.get("args") if isinstance(rec.get("args"), dict) else {}
     out = {"tool": scrub_text(rec.get("tool", "?"), terms), "secs": rec.get("secs"), "isError": rec.get("isError"),
            "args": {k: scrub_value(k, v, terms) for k, v in args.items()}}
+    if rec.get("notRun"): out["notRun"] = True
     if rec.get("error"): out["error"] = scrub_text(str(rec["error"])[:300], terms)
     return out
 

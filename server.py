@@ -32,7 +32,7 @@ OPS = {"eq", "ne", "gt", "ge", "lt", "le", "in", "ni", "ct", "sw", "ew", "bt"}
 
 INSTRUCTIONS = """Rent Manager: read-only, LIVE data. Never request passwords in chat. If no property is named, ask which or confirm the whole portfolio. Quote Scope and Answer lines and numbers exactly; do no arithmetic. Prefer run_recipe; use bulk calls, never per-tenant loops. Files are local, not uploaded; share/open only using the client's available file tools, otherwise show the saved path.
 1. Recipe fits: run_recipe(name, params) directly; find_recipe is optional. Dates: YYYY-MM-DD, 'September 2026', 'ytd'; ranges: period=.
-2. No recipe: list_reports(words) -> run_report(id, parameters). One report covers all properties.
+2. No recipe, or a report by name (balance sheet): list_reports(words) -> run_report(id, parameters); one covers all properties.
 3. PDF: report_pdf(report, properties); for report contents use run_recipe/run_report.
 4. Else search_models -> describe_model -> count -> query. Batch ids: UnitID,in,(1,2,3). enum_values lists enums; report_info lists report options.
 BIG RESULTS: 'MORE:' = rows missing; use read_result(result_id, offset) when offered unless a shared filesystem is confirmed. Don't raise show.
@@ -44,6 +44,13 @@ Filters 'Field,op,value' joined by ';'; ops eq ne gt ge lt le in ni ct sw ew bt;
 # ----------------------------------------------------------------------------- helpers
 class ToolError(Exception):
     pass
+
+class NotRun(ToolError):
+    """A caller mistake caught before the report or recipe runs (unknown recipe or report, bad report parameter key,
+    bad recipe param value; a property lookup may already have been made). The MCP reply is a normal result that starts
+    with 'NOT RUN:' (isError false): some clients pause the whole server after a few error results, and a wrong name or
+    argument should not cause that. Rent Manager, network, login and other real failures stay ToolError (isError true),
+    and so does a recipe whose own report or parameters do not exist on this Rent Manager."""
 
 def _today():
     return datetime.date.today()
@@ -1787,7 +1794,7 @@ def report_by(id_or_name):
             return r
     hits = [x for _, x in SI.search(key, "reports", 5)]
     names = {r["id"]: r["name"] for r in i["reports"]}
-    raise ToolError("Unknown report '%s'. Close: %s" % (key, ", ".join("%s (id %s)" % (names[h], h) for h in hits) or "use list_reports"))
+    raise NotRun("Unknown report '%s'. Close: %s" % (key, ", ".join("%s (id %s)" % (names[h], h) for h in hits) or "use list_reports"))
 
 def recipe_report(req):
     """Report named by name (portable across instances); report_id is only a hint, doctor warns on mismatch."""
@@ -1804,7 +1811,7 @@ def _ready_call(rep):
     """Copy-ready run_report line: first non-scope parameter with its default as the example Key,Value."""
     ex = next((p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden") and not p.get("ids_of")), None)
     par = "%s,%s" % (ex["key"], ex.get("default") if ex.get("default") not in (None, "") else "") if ex else ""
-    return "run_report(id=%s, parameters='%s'%s)" % (rep["id"], par, ", property='...'" if _prop_param(rep) else "")
+    return "run_report(id='%s', parameters='%s'%s)" % (rep["id"], par, ", property='...'" if _prop_param(rep) else "")
 
 def t_list_reports(search="", limit=20):
     i = idx()
@@ -1842,18 +1849,37 @@ def t_report_info(id):
     lines.append("Dates: YYYY-MM-DD. Example: run_report(id=%s, parameters='Key,Value;Key2,Value2', property='...')" % rep["id"])
     return "\n".join(lines)
 
+def _enum_key_for(known, word):
+    """(Key, value) when `word` is the name of an allowed value of one of the report's enum parameters, such as 'Accrual'
+    for Basis -> ('Basis', 1). None otherwise or without the enum files."""
+    w = str(word).strip().lower()
+    for p in known.values():
+        if not p.get("enum"): continue
+        try:
+            with open(os.path.join(SI.SPEC, "enums", p["enum"] + ".json"), encoding="utf-8") as f: vals = json.load(f)
+        except (OSError, ValueError, TypeError):
+            continue
+        for e in vals if isinstance(vals, list) else []:
+            if isinstance(e, dict) and str(e.get("Name", "")).strip().lower() == w and str(e.get("Value")) not in [str(x) for x in p.get("exclude") or []]:
+                return p["key"], e.get("Value")
+    return None
+
 def build_report_params(rep, parameters):
     """parameters: 'K,V;K2,V2' or dict. Validates keys case-insensitively; returns ordered dict."""
     if isinstance(parameters, dict): items = list(parameters.items())
     else:
         items = []
         for clause in split_top(parameters or ""):
-            if "," not in clause: raise ToolError("parameter '%s' must be Key,Value" % clause)
+            if "," not in clause: raise NotRun("parameter '%s' must be Key,Value" % clause)
             k, v = clause.split(",", 1); items.append((k.strip(), v.strip()))
     known = {p["key"].lower(): p for p in rep.get("params") or [] if p.get("key")}
     out, probs = {}, []
     for k, v in items:
         p = known.get(str(k).lower())
+        ekv = None if p else _enum_key_for(known, k)
+        if ekv:
+            ek, ev = ekv
+            probs.append("'%s' is a value of %s, not a parameter of %s: use parameters='%s,%s' (report_info(%s) lists all keys)" % (k, ek, rep["name"], ek, ev, rep["id"])); continue
         if not p:
             probs.append("'%s' is not a parameter of %s. Close: %s. e.g. parameters='%s' (all keys: report_info(%s))" % (k, rep["name"], ", ".join(suggest(k, [x["key"] for x in known.values()])) or "(see report_info)", ",".join(next(([x["key"], str(x.get("default") or "")] for x in known.values() if x["key"].lower() not in ("propertyids", "propownerids")), ["Key", "Value"])), rep["id"])); continue
         v = "" if v is None else v
@@ -1865,7 +1891,7 @@ def build_report_params(rep, parameters):
         if isinstance(v, str) and v.lower() in ("true", "false") and str(p.get("type")).lower() == "bool": v = v.capitalize()
         if p.get("multi") and v and not v.startswith("(") and v.lower() != "all": v = "(" + v + ")"
         out[p["key"]] = v
-    if probs: raise ToolError("Nothing was run. Fix these and retry:\n- " + "\n- ".join(probs))
+    if probs: raise NotRun("Nothing was run. Fix these and retry:\n- " + "\n- ".join(probs))
     return out
 
 def run_report_raw(rep, params):
@@ -2084,19 +2110,61 @@ def has_period(spec):
 def period_range(p):
     """this_month | last_month | ytd | t12 | YYYY-MM | 'September 2026' | 'Sep' -> (start, end) ISO dates."""
     sp = str(p).strip()
-    if re.fullmatch(r"\d{4}-\d\d-\d\d", sp): raise ToolError("period takes a month, quarter or year (this_month, last_month, ytd, t12, 2026-09, 'September 2026', 'Q3 2026', 2025); for exact dates pass start and end, e.g. start='%s', end='%s'." % (sp, sp))
+    if re.fullmatch(r"\d{4}-\d\d-\d\d", sp): raise NotRun("period takes a month, quarter or year (this_month, last_month, ytd, t12, 2026-09, 'September 2026', 'Q3 2026', 2025); for exact dates pass start and end, e.g. start='%s', end='%s'." % (sp, sp))
     return parse_date(sp), parse_date(sp, end=True)
 
-def unknown_recipe_msg(name, recs):
-    """1b: near-miss recipe name -> name the exact call (never auto-run)."""
+def unknown_recipe_msg(name, recs, args=None):
+    """1b: near-miss recipe name -> name the exact call (never auto-run). A built-in report whose name is the recipe name
+    (balance_sheet -> BalanceSheet) is offered first as a ready run_report call; other close reports follow the recipe guess."""
     cand = difflib.get_close_matches(str(name).lower(), [k.lower() for k in recs], n=1, cutoff=0.6)
     guess = next((k for k in recs if k.lower() == cand[0]), None) if cand else None
     if not guess:
         hit = recipe_search(str(name).replace("_", " "))
         guess = hit[0][1]["name"] if hit else None
+    reps, exact = builtin_report_matches(name)
+    if exact:
+        rep = reps[0]
+        msg = ("Unknown recipe '%s'. It is a built-in Rent Manager report: %s %s. Run it with %s (report_info('%s') lists every option). "
+               "Recipes are only shortcuts; any standard report runs by name with list_reports + run_report." % (name, rep["id"], rep["name"], report_call(rep, args), rep["id"]))
+        if len(reps) > 1: msg += " Related reports: %s." % ", ".join("%s %s" % (r["id"], r["name"]) for r in reps[1:])
+        return msg + " Recipes: %s" % ", ".join(recs)
+    more = (" Built-in reports that may fit: %s; run one with run_report(id='<id>') (report_info('<id>') lists its options)."
+            % ", ".join("%s %s" % (r["id"], r["name"]) for r in reps)) if reps and not cand else ""   # a near-spelling recipe needs no report list
     if guess:
-        return "Unknown recipe '%s'. Did you mean run_recipe(name='%s')? (not run automatically). Available: %s" % (name, guess, ", ".join(recs))
-    return "Unknown recipe '%s'. Available: %s. e.g. run_recipe(name='%s')" % (name, ", ".join(recs), next(iter(recs), "collections"))
+        return "Unknown recipe '%s'. Did you mean run_recipe(name='%s')? (not run automatically).%s Available: %s" % (name, guess, more, ", ".join(recs))
+    return "Unknown recipe '%s'.%s Available: %s. e.g. run_recipe(name='%s')" % (name, more, ", ".join(recs), next(iter(recs), "collections"))
+
+def builtin_report_matches(words, n=3):
+    """Built-in reports for a recipe-like name -> ([report, ...], exact). exact: a report's name equals the words ignoring
+    case, spaces, '_' and '-' (balance_sheet -> BalanceSheet); it comes first. ([], False) without a spec index."""
+    try: reps = idx()["reports"]
+    except ToolError: return [], False
+    key = re.sub(r"[\s_\-]+", "", str(words).lower())
+    exact = [r for r in reps if re.sub(r"[\s_\-]+", "", r["name"].lower()) == key]
+    by_id = {r["id"]: r for r in reps}
+    hits = [by_id[h] for _, h in SI.search(re.sub(r"[_\-]+", " ", str(words)), "reports", n) if h in by_id]
+    return (exact + [r for r in hits if r not in exact])[:n], bool(exact)
+
+def report_call(rep, args=None):
+    """Ready run_report call for a report, carrying over what a wrong run_recipe call asked for: basis (Cash/Accrual -> the
+    report's Basis key), as_of (AsOfDate) and property. Otherwise the generic example of list_reports."""
+    a = dict(args or {})
+    if isinstance(a.get("params"), dict): a = dict(a.pop("params"), **a)
+    a = {str(k).lower(): v for k, v in a.items()}
+    keys = {p["key"].lower(): p["key"] for p in rep.get("params") or [] if p.get("key")}
+    rpb = re.search(r"(?:^|;)\s*basis\s*,\s*([^;]+)", str(a.get("report_params") or ""), re.I)
+    if a.get("basis") in (None, "") and rpb: a["basis"] = rpb.group(1).strip()
+    pars = []
+    if a.get("basis") not in (None, "") and "basis" in keys:
+        try: b = parse_basis(a["basis"])[0]
+        except ToolError: b = ""
+        if b != "": pars.append("%s,%s" % (keys["basis"], b))
+    asof = a.get("as_of") or a.get("asofdate")
+    if asof not in (None, "") and "asofdate" in keys: pars.append("%s,%s" % (keys["asofdate"], asof))
+    prop = a.get("property")
+    if not pars and prop in (None, ""): return _ready_call(rep)
+    pp = (", property=%r" % str(prop) if prop not in (None, "") else ", property='...'") if _prop_param(rep) else ""
+    return "run_report(id='%s'%s%s)" % (rep["id"], ", parameters='%s'" % ";".join(pars) if pars else "", pp)
 
 def _recipe_key(n):
     """'Rent Roll' | 'rent-roll' | ' Collections ' -> 'rent_roll' | 'collections'."""
@@ -2173,6 +2241,10 @@ def t_find_recipe(query, limit=3):
                 "(add parameters='Key,Value;...' for report options; report_info(%s) lists them)." % (rid, rid))
     hits = recipe_search(query)[: int(limit)]
     cl = concept_lines(query) + suggestion_lines(query)
+    reps, exact = builtin_report_matches(query, 1)
+    same = any(_recipe_key(r["name"]).replace("_", "") == re.sub(r"[\s_\-]+", "", query.lower()) for r in load_recipes())
+    if exact and not same:   # the words name a built-in report with no recipe of that name ('balance sheet' -> BalanceSheet): the direct route
+        cl.insert(0, "Built-in report %s %s matches by name: %s (report_info('%s') lists its options)." % (reps[0]["id"], reps[0]["name"], _ready_call(reps[0]), reps[0]["id"]))
     if not hits:
         names = ", ".join(r["name"] for r in load_recipes())
         return "\n".join(cl + ["No recipe matches '%s'. Available: %s\nOtherwise use search_models / list_reports." % (query, names)])
@@ -2323,7 +2395,7 @@ def parse_basis(v):
     if t in ("", "default", "none"): return "", "Cash (Rent Manager default)"
     if t in ("cash", "2"): return 2, "Cash"
     if t in ("accrual", "1"): return 1, "Accrual"
-    raise ToolError("basis must be Cash or Accrual, e.g. params={'basis': 'Accrual'}")
+    raise NotRun("basis must be Cash or Accrual, e.g. params={'basis': 'Accrual'}")
 
 def _sent_basis_label(spec, req, rp, label):
     """Basis label for what is actually sent: report_params may override the report key a basis param fills (e.g. 'Basis,1')."""
@@ -2341,18 +2413,18 @@ def _sent_basis_label(spec, req, rp, label):
 
 def _param_num(v, pname, name):
     try: return float(str(v).replace("$", "").replace(",", "").strip())
-    except ValueError: raise ToolError("Param '%s' must be a number, got '%s'. e.g. run_recipe(name='%s', params={'%s': 100})" % (pname, v, name, pname))
+    except ValueError: raise NotRun("Param '%s' must be a number, got '%s'. e.g. run_recipe(name='%s', params={'%s': 100})" % (pname, v, name, pname))
 
 def run_recipe_result(name, params=None, all_properties=False, show=0):
     """Runs a recipe. Returns {"text", "headline", "facts", "scope"}; text (the tool output) is rendered from the same facts (2d)."""
     t0 = time.time()
     if isinstance(params, str):
         try: params = json.loads(params) if params.strip() else {}
-        except ValueError: raise ToolError("params must be a JSON object, e.g. {\"property\": \"Oak Court\", \"period\": \"last month\"}")
+        except ValueError: raise NotRun("params must be a JSON object, e.g. {\"property\": \"Oak Court\", \"period\": \"last month\"}")
     params = dict(params or {})
     recs = {r["name"]: r for r in load_recipes()}
     r = recs.get(name) or next((x for k, x in recs.items() if k.lower() == _recipe_key(name)), None)
-    if not r: raise ToolError(unknown_recipe_msg(name, recs))
+    if not r: raise NotRun(unknown_recipe_msg(name, recs))
     spec = recipe_spec(r)
     if has_period(spec) and params.get("period") not in (None, ""):  # one 'period' sets start+end
         ps, pe = period_range(params.pop("period"))
@@ -2407,19 +2479,24 @@ def run_recipe_result(name, params=None, all_properties=False, show=0):
         rp = {k: _fill(v, vals) for k, v in (req.get("parameters") or {}).items()}
         rp = {k: v for k, v in rp.items() if v is not None}
         if vals.get("report_params") not in (None, ""):   # any other report option, validated against the report's parameter list
-            rp.update(build_report_params(report_by(recipe_report(req)), vals["report_params"]))
+            try: rep = report_by(recipe_report(req))
+            except NotRun as e: raise ToolError("Recipe %s cannot run its report on this Rent Manager: %s" % (r["name"], e))   # not the caller's mistake
+            rp.update(build_report_params(rep, vals["report_params"]))   # the caller's own options: a mistake here is NOT RUN
             basis_label = _sent_basis_label(spec, req, rp, basis_label)
         pre = None
         pkeys = [k for k, v in (req.get("parameters") or {}).items() if isinstance(v, str) and "{property}" in v]
-        if int(r.get("chunks") or 1) > 1 and not prop_ids and req.get("grid") and len(pkeys) == 1 and pkeys[0] not in rp:
-            try: props = properties(live=True)   # v4 1a: never the alias file; on failure run unchunked
-            except ToolError: props = []
-            chunks = split_chunks(props, r["chunks"])
-            if len(chunks) > 1:   # portfolio-wide run: split the property list (2b)
-                rep = report_by(recipe_report(req))
-                pre = run_report_chunked(rep, build_report_params(rep, rp), _prop_param(rep) or pkeys[0], chunks, req["grid"])
-        res = t_run_report(recipe_report(req), rp, property="", all_properties=True, grid=req.get("grid", ""),
-                           rename=post.get("rename"), save_as=name, _opts=opts, _pre=pre, **common)
+        try:   # from here a NotRun comes from the recipe's own report parameters, not from the caller: a real error
+            if int(r.get("chunks") or 1) > 1 and not prop_ids and req.get("grid") and len(pkeys) == 1 and pkeys[0] not in rp:
+                try: props = properties(live=True)   # v4 1a: never the alias file; on failure run unchunked
+                except ToolError: props = []
+                chunks = split_chunks(props, r["chunks"])
+                if len(chunks) > 1:   # portfolio-wide run: split the property list (2b)
+                    rep = report_by(recipe_report(req))
+                    pre = run_report_chunked(rep, build_report_params(rep, rp), _prop_param(rep) or pkeys[0], chunks, req["grid"])
+            res = t_run_report(recipe_report(req), rp, property="", all_properties=True, grid=req.get("grid", ""),
+                               rename=post.get("rename"), save_as=name, _opts=opts, _pre=pre, **common)
+        except NotRun as e:
+            raise ToolError("Recipe %s cannot run its report on this Rent Manager: %s" % (r["name"], e))
         sc_line = "Scope: " + scope.replace("\\", "/") + ("\nBasis: " + basis_label if basis_label else "")
         res = re.sub(r"Scope: [^\n]*", lambda m: sc_line, res, count=1)
     else:
@@ -3292,7 +3369,7 @@ POST = {"columns": S("Comma list of columns to keep/order (after flattening, e.g
         "where": S("Local row filter 'Column,op,value' (eq ne gt ge lt le ct)"), "show": I("Rows to show inline (default 40; 10 when the result has over 1000 rows); replies are size-capped, page the rest with read_result")}
 
 TOOLS = [
-    ("find_recipe", "Rent Manager: find a ready-made recipe for a question about tenants, units, delinquency, vacancy, rent roll, lease expirations, ledgers, P&L/NOI. Optional if the run_recipe catalog already shows a fit.",
+    ("find_recipe", "Rent Manager: find a ready-made recipe for a question about tenants, units, delinquency, vacancy, rent roll, lease expirations, ledgers, P&L/NOI. Optional if the run_recipe catalog already shows a fit. Recipes are curated shortcuts; a standard Rent Manager report asked for by name (balance sheet, cash flow, general ledger...) is run with list_reports + run_report.",
      {"query": S("The user's question or key words")}, ["query"], t_find_recipe),
     ("run_recipe", "Rent Manager: run a ready-made recipe by name (delinquency, vacancy, rent roll, P&L, ledgers...).",
      {"name": S("Recipe name from the catalog"), "params": {"type": "object", "description": "e.g. {\"property\": \"Oak Court\", \"period\": \"last month\"}; recipe params may also be given at top level"},
@@ -3321,11 +3398,11 @@ TOOLS = [
            "summary": S("rent (on RecurringCharges: tenant+subsidy portions and total per tenant) | ledger (on Tenants/{id}/Transactions: last rent charge, last payment, balance)"),
            "as_of": S("With summary=rent: rent in effect on this date (default: latest per tenant)")}, **POST),
      ["resource"], t_query),
-    ("list_reports", "Rent Manager: search the built-in reports (aged receivables, rent roll, vacancy, P&L, GL...) by words, or list them.",
+    ("list_reports", "Rent Manager: search the built-in (standard) Rent Manager reports by name or words (balance sheet, income statement/P&L, trial balance, cash flow, general ledger, aged receivables, rent roll, vacancy...), or list them. Use this for any standard report asked for by name, then run_report(id).",
      {"search": S("Words, e.g. 'rent roll'"), "limit": I("Max results (20)")}, [], t_list_reports),
     ("report_info", "Rent Manager: parameters (keys, defaults, allowed values) of a built-in report.",
      {"id": S("Report ID or name")}, ["id"], t_report_info),
-    ("run_report", "Rent Manager: run a built-in report live (ONE call; all properties unless property= is given). Returns the main grid; JSON saved to out/.",
+    ("run_report", "Rent Manager: run a built-in report live, e.g. a balance sheet, income statement or rent roll (ONE call; all properties unless property= is given). Returns the main grid; JSON saved to out/.",
      dict({"id": S("Report ID or name"), "parameters": S("Key,Value;Key2,Value2 (see report_info)"),
            "property": S("Property name(s)/ID(s), comma separated; empty = all properties"),
            "grid": S("Which grid to show (default: biggest)"), "save_as": S("Output file base name")}, **POST),
@@ -3361,12 +3438,14 @@ TITLES = {"find_recipe": "Find recipe", "run_recipe": "Run recipe", "resolve": "
           "find_attachments": "Find attachments", "download_file": "Download file", "locations": "List locations", "read_result": "Read saved result"}
 LOCAL_ONLY = {"describe_model", "enum_values", "search_models", "list_reports", "report_info", "read_result"}  # no Rent Manager call
 NO_LOCATION = {"read_result"}   # reads this server's saved result; a location means nothing there
+ARG_ALIASES = {"list_reports": {"query": "search"}, "find_recipe": {"question": "query"}, "search_models": {"search": "query"}}   # not advertised
 
 def tool_desc(name, desc):
     if name == "run_recipe":
         head = ("Rent Manager: run a ready-made recipe (tenants, delinquency, vacancy, units, rent roll, P&L/NOI, ledgers, GL). "
                 "If one fits, call it directly; find_recipe is optional. Params go in params or at top level; property takes a name or ID; "
-                "date-range recipes take period (this_month|last_month|ytd|t12|2026-09|'September 2026'|'Q3 2026'|2025). Report recipes take report_params='Key,Value;..' for other report options.\nRecipes:\n")
+                "date-range recipes take period (ytd|t12|last_month|2026-09|'Q3 2026'|2025). Report recipes take report_params='Key,Value;..'. "
+                "Other reports (balance sheet...): list_reports + run_report.\nRecipes:\n")
         return head + recipe_catalog(DESC_LIMIT - len(head) - 20)
     return desc
 
@@ -3389,7 +3468,13 @@ def call_tool(name, args):
     maybe_prune()
     loc_arg = args.pop("location", None)
     if name in NO_LOCATION: loc_arg = None
-    if name == "run_recipe": args = flatten_recipe_args(args)
+    for a, b in ARG_ALIASES.get(name, {}).items():   # common wrong argument names that mean exactly one real one
+        if a in args and b not in args: args[b] = args.pop(a)
+    if name == "run_recipe":
+        args = flatten_recipe_args(args)
+        recs = {r["name"]: r for r in load_recipes()}
+        if args.get("name") not in (None, "") and _recipe_key(args["name"]) not in {_recipe_key(k) for k in recs}:
+            raise NotRun(unknown_recipe_msg(args["name"], recs, args))   # before the argument check: other args may be fine for the right tool
     bad = [k for k in args if k not in props]
     if bad: raise ToolError("Unknown argument(s) %s. Allowed: %s" % (bad, ", ".join(k for k in list(props) + ["location"] if k not in HIDDEN)))
     loc = resolve_location(loc_arg) if loc_arg not in (None, "") else None
@@ -3421,9 +3506,10 @@ def log_mask(o):
     if isinstance(o, str): return _LOG_PII.sub("[masked]", o)
     return o
 
-def call_log(tool, args, secs, err, chars, head=""):
+def call_log(tool, args, secs, err, chars, head="", not_run=False):
     """One JSON line per tools/call in local/mcp_calls.jsonl (gitignored); RM_MCP_LOG=path overrides, RM_MCP_LOG=off disables.
-    Args only (never env/credentials; emails/phones/long digit runs masked) plus the first 300 chars of an error (masked too).
+    Args only (never env/credentials; emails/phones/long digit runs masked) plus the first 300 chars of an error or of a
+    NOT RUN reply (masked too; NOT RUN replies also get "notRun": true).
     The file rotates at 5 MB to <name>.1.jsonl (one backup). Never raises."""
     path = os.environ.get("RM_MCP_LOG")
     if path is None: path = os.path.join(rm.HERE, "local", "mcp_calls.jsonl")
@@ -3432,7 +3518,8 @@ def call_log(tool, args, secs, err, chars, head=""):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "tool": tool, "args": log_mask(mask_args(args)), "secs": round(secs, 3),
                "isError": bool(err), "chars": chars}
-        if err: rec["error"] = log_mask(head[:300])
+        if not_run: rec["notRun"] = True
+        if err or not_run: rec["error"] = log_mask(head[:300])
         line = json.dumps(rec, ensure_ascii=False, default=str)
         with _loglock:
             try:
@@ -3461,15 +3548,18 @@ def handle(msg):
             result = {"tools": tool_list()}
         elif method == "tools/call":
             t0 = time.time()
+            not_run = False
             try:
                 text, err = call_tool(params.get("name"), params.get("arguments") or {}), False
+            except NotRun as e:   # a call mistake, nothing sent: normal result so clients do not pause the server for it
+                text, err, not_run = "NOT RUN: %s" % e, False, True
             except ToolError as e:
                 text, err = "ERROR: %s" % e, True
             except Exception as e:  # never crash the server; no secrets in tracebacks (rm never logs creds)
                 traceback.print_exc(file=sys.stderr)
                 text, err = "ERROR (internal): %s: %s" % (type(e).__name__, e), True
-            sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else ""))
-            call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err else "")
+            sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else " NOT RUN" if not_run else ""))
+            call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err or not_run else "", not_run)
             result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
         elif method in ("resources/list", "prompts/list"):
             result = {method.split("/")[0]: []}

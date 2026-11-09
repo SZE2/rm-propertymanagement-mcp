@@ -216,6 +216,25 @@
    ],
    "short": "report 51 GeneralLedger (PropOwnerIDs, StartDate, EndDate) or 142 GeneralLedgerUnit (PropertyID, UNITID)",
    "text": "General ledger: report 51 GeneralLedger (PropOwnerIDs, StartDate, EndDate, Basis, GLAccountIDs; postings with description, debit, credit, CustomerName, UnitName), report 142 GeneralLedgerUnit (one PropertyID, UNITID, dates), or recipe gl_activity."
+  },
+  {
+   "id": "financial_statements",
+   "words": [
+    "balance sheet",
+    "balance sheets",
+    "cash flow",
+    "cash flow statement",
+    "statement of cash flows",
+    "financial statement",
+    "financial statements",
+    "built in report",
+    "standard report"
+   ],
+   "resources": [
+    "GLAccounts"
+   ],
+   "short": "built-in reports such as 38 BalanceSheet (AsOfDate, Basis, PropOwnerIDs): list_reports(search='balance sheet') -> run_report",
+   "text": "Financial statements are built-in Rent Manager reports, not recipes: list_reports(search='balance sheet' or 'cash flow') -> run_report(id, parameters). Example: report 38 BalanceSheet (also 39 BalanceSheetComparison, 40 BalanceSheetUnit) with parameters='AsOfDate,YYYY-MM-DD;Basis,1' and property='...'. Basis 1 = Accrual, 2 = Cash (the default); report_info(id) lists every option. Recipes exist only for the P&L (profit_and_loss, profit_and_loss_summary) and the trial balance (trial_balance)."
   }
  ]
 }
