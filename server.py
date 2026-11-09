@@ -1804,13 +1804,17 @@ def _param_summary(rep, maxn=6):
     """One-line parameter list for list_reports: Key=default, visible keys only, property scope key first."""
     ps = [p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden")]
     ps.sort(key=lambda p: 0 if p.get("ids_of") == "Property" else 1)
-    out = ["%s=%s" % (p["key"], p.get("default") if p.get("default") not in (None, "") else "") for p in ps[:maxn]]
+    out = ["%s=%s" % (p["key"], "today" if _is_date_typed(p) and p.get("default") not in (None, "") else p.get("default") if p.get("default") not in (None, "") else "")
+           for p in ps[:maxn]]
     return ", ".join(out) + (", +%d more" % (len(ps) - maxn) if len(ps) > maxn else "")
 
 def _ready_call(rep):
-    """Copy-ready run_report line: first non-scope parameter with its default as the example Key,Value."""
-    ex = next((p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden") and not p.get("ids_of")), None)
-    par = "%s,%s" % (ex["key"], ex.get("default") if ex.get("default") not in (None, "") else "") if ex else ""
+    """Copy-ready run_report line: the Basis parameter (it changes the numbers), else the first non-scope parameter, with its
+    default as the example Key,Value (a date as today's date: the cached default is the day the index was built)."""
+    vis = [p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden") and not p.get("ids_of")]
+    ex = next((p for p in vis if _is_basis(p)), None) or (vis[0] if vis else None)
+    dv = (datetime.date.today().isoformat() if _is_date_typed(ex) and ex.get("default") not in (None, "") else ex.get("default")) if ex else None
+    par = "%s,%s" % (ex["key"], dv if dv not in (None, "") else "") if ex else ""
     return "run_report(id='%s', parameters='%s'%s)" % (rep["id"], par, ", property='...'" if _prop_param(rep) else "")
 
 def t_list_reports(search="", limit=20):
@@ -1827,27 +1831,201 @@ def t_list_reports(search="", limit=20):
     calls = [_ready_call(by_id[h]) for h in ids[:3]] if search else []
     tail = "Next: run_report(id, parameters='Key,Value;...') (report_info(id) for every option and allowed values)."
     if calls: tail = "Ready to run (fill Key,Value from the [params]; omit a key for its default):\n" + "\n".join(calls) + "\n" + tail
+    one = _single_match(search, [by_id[h] for h in ids]) if search else None
+    if one: tail += "\n" + param_block(one)   # one report is clearly meant: its whole parameter list, never for a broad search
+    elif calls:   # a broad search: no parameter lists, but the basis choice is named once when a suggested report has one
+        b = next((p for h in ids[:3] for p in _visible(by_id[h]) if _is_basis(p)), None)
+        if b: tail += "\n" + param_nudges({"params": [b]})[0]
     return "Reports (id  name  [parameters = defaults])%s:\n%s\n%s" % (" for '%s'" % search if search else "", "\n".join(rows) or "(none)", tail)
+
+def _single_match(words, reps):
+    """The one report a search clearly means: the only hit, or the hit whose name equals the words ignoring case, spaces,
+    '_' and '-' ('balance sheet' -> BalanceSheet). None for a broad search."""
+    if len(reps) == 1: return reps[0]
+    key = re.sub(r"[\s_\-]+", "", str(words).lower())
+    exact = [r for r in reps if re.sub(r"[\s_\-]+", "", r["name"].lower()) == key]
+    return exact[0] if len(exact) == 1 else None
 
 def _prop_param(rep):
     for p in rep.get("params") or []:
         if p.get("ids_of") == "Property": return p["key"]
     return None
 
+# ----------------------------------------------------------------------------- report parameters in plain words
+STD_BASIS = [("1", "Accrual"), ("2", "Cash")]   # Rent Manager's eBasis values; used when the enum file is missing
+PARAMS_TTL = 1800          # seconds: a report's full parameter list is not repeated on success within this time
+PARAMS_CAP = 3000          # characters of one report's parameter list in a reply
+_SHOWN = {}                # (location, report id) -> time its full parameter list was last shown
+_TOGGLE = re.compile(r"inactive|include|exclude|zero|prospect|closed|former|past|hidden|restrict|only", re.I)
+_PERIODISH = re.compile(r"period|year|month", re.I)
+
+def _visible(rep):
+    return [p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden")]
+
+def _enum_pairs(p, every=False):
+    """[(value, name)] of an enum parameter, without its excluded values unless every=True; [] without the enum file."""
+    if not p.get("enum"): return []
+    try:
+        with open(os.path.join(SI.SPEC, "enums", p["enum"] + ".json"), encoding="utf-8-sig") as f: vals = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return []
+    ex = set() if every else {str(x) for x in p.get("exclude") or []}
+    return [(str(e.get("Value")), str(e.get("Name"))) for e in (vals if isinstance(vals, list) else [])
+            if isinstance(e, dict) and str(e.get("Value")) not in ex][:12]
+
+def _is_basis(p):
+    return str(p.get("key", "")).lower() == "basis" or str(p.get("enum", "")).lower() == "ebasis"
+
+def _is_date_typed(p):
+    return str(p.get("type") or "").lower() == "date"
+
+def _date_default(p):
+    """A date parameter's default in words. Rent Manager fills in the day the report runs; the default cached in the
+    index is only the day the index was built, so it is never shown."""
+    d, today = str(p.get("default") or ""), datetime.date.today().isoformat()
+    if not d: return "blank"
+    return "today - today (%s)" % today if " - " in d else "today (%s)" % today
+
+def _is_date(p):
+    t = str(p.get("type") or "").lower()
+    return t == "date" or (t != "bool" and not p.get("ids_of") and bool(_PERIODISH.search(str(p.get("key", "")))))
+
+def _is_toggle(p):
+    return str(p.get("type") or "").lower() == "bool" and bool(_TOGGLE.search("%s %s" % (p.get("key", ""), p.get("label", ""))))
+
+def _enum_name(p, v):
+    m = dict(_enum_pairs(p, True))
+    if not m and _is_basis(p): m = dict(STD_BASIS)
+    return m.get(str(v).strip())
+
+def _basis_default(p):
+    """Basis default in words: the report's default, or Cash (Rent Manager's default) when it has none."""
+    d = str(p.get("default") or "").strip()
+    return _enum_name(p, d) or ("Cash" if d in ("", "2") else d)
+
+def _plain_type(p):
+    t = str(p.get("type") or "").lower()
+    if p.get("ids_of"): return "IDs of %s%s" % (p["ids_of"], ", list like (1,2)" if p.get("multi") else "")
+    if p.get("enum") or p.get("values") or _is_basis(p): return "choice"
+    return {"bool": "True/False", "date": "date YYYY-MM-DD", "int": "whole number", "decimal": "number", "string": "text"}.get(t, "value")
+
+def _word(p, v):
+    """One value in plain words: '' -> blank, an enum number -> '2 = Cash'."""
+    s = "" if v is None else str(v)
+    if s == "": return "blank"
+    n = _enum_name(p, s)
+    return "%s = %s" % (s, n) if n else s
+
+def _param_desc(p):
+    label = str(p.get("label") or "")
+    out = "- %s (%s)%s." % (p["key"], _plain_type(p), ": " + label if label and _norm(label).replace(" ", "") != p["key"].lower() else "")
+    if _is_date_typed(p): out += " Default %s when not set." % _date_default(p)
+    else: out += " Default %s." % _word(p, p.get("default"))
+    allowed = ["%s = %s" % pv for pv in _enum_pairs(p)] or (["%s = %s" % pv for pv in STD_BASIS] if _is_basis(p) else [])
+    if not allowed and p.get("values"): allowed = [str(v) if str(v) != "" else "blank" for v in p["values"][:12]]
+    if not allowed and p.get("enum"): allowed = ["see enum_values('%s')" % p["enum"]]
+    if str(p.get("type") or "").lower() == "bool": allowed = ["True", "False"]
+    if allowed: out += " Allowed: %s." % ", ".join(allowed)
+    return out
+
+def param_nudges(rep):
+    """Warnings for the parameters whose value changes what the numbers mean: basis, dates/periods, include/exclude switches."""
+    ps, out = _visible(rep), []
+    b = next((p for p in ps if _is_basis(p)), None)
+    if b:
+        pairs = _enum_pairs(b) or STD_BASIS
+        out.append("%s changes the numbers: %s (default %s). Choose deliberately and tell the user which basis you used."
+                   % (b["key"], ", ".join("%s=%s" % pv for pv in pairs), _basis_default(b)))
+    dates = [p["key"] for p in ps if _is_date(p)]
+    if dates:
+        out.append("%s set%s the period the numbers cover: set %s to what the user asked for and tell the user the period you used."
+                   % (", ".join(dates[:6]), "" if len(dates) > 1 else "s", "them" if len(dates) > 1 else "it"))
+    tg = [p for p in ps if _is_toggle(p)]
+    if tg:
+        out.append("%s change%s which records count (default %s): change only on purpose and tell the user."
+                   % (", ".join(p["key"] for p in tg[:6]), "" if len(tg) > 1 else "s", ", ".join("%s=%s" % (p["key"], _word(p, p.get("default"))) for p in tg[:6])))
+    return out
+
+def _shown_key(rep):
+    try: loc = rm.current_location()
+    except Exception: loc = None
+    return (str(loc), rep["id"])
+
+def params_due(rep):
+    """True when this report's full parameter list has not been shown recently (first use, or PARAMS_TTL ago)."""
+    return time.time() - _SHOWN.get(_shown_key(rep), 0) > PARAMS_TTL
+
+def param_block(rep, cap=PARAMS_CAP):
+    """Every visible parameter of ONE report (key, type, default, allowed values in plain words), the meaning-changing ones
+    flagged first. Bounded to `cap` characters; the rest is named with report_info."""
+    head = ["Parameters of %s (id %s); omit a key to use its default:" % (rep["name"], rep["id"])]
+    head += ["IMPORTANT: " + n for n in param_nudges(rep)]
+    pk = _prop_param(rep)
+    tail = ["Property scope key: %s (run_report also accepts property='name or ID')." % pk] if pk else []
+    lines, ps = [], _visible(rep)
+    budget = cap - len("\n".join(head + tail)) - 80
+    for i, p in enumerate(ps):
+        d = _param_desc(p)
+        if len(d) + 1 > budget:
+            lines.append("... %d more: report_info('%s')" % (len(ps) - i, rep["id"])); break
+        lines.append(d); budget -= len(d) + 1
+    _SHOWN[_shown_key(rep)] = time.time()
+    return "\n".join(head + (lines or ["(no options)"]) + tail)
+
+def _used(p, v, default=False):
+    s = "" if v is None else str(v)
+    n = _enum_name(p, s) if s else None
+    if default: return "%s (default)" % (n or (_basis_default(p) if _is_basis(p) else s if s else "blank"))
+    if n: return "%s (%s)" % (n, s)
+    return s if len(s) <= 60 else s[:57] + "..."
+
+USED_CAP = 700
+
+def params_used(rep, sent, extra=None):
+    """'Parameters used: ...' for a report: every value sent to Rent Manager, then every other visible parameter at its
+    default (marked), meaning-changing ones first. Bounded to USED_CAP characters."""
+    by = {p["key"].lower(): p for p in rep.get("params") or [] if p.get("key")}
+    items, seen = [], set()
+    for k, v in (sent or {}).items():
+        if v in (None, ""): continue   # empty values are not sent: the default applies
+        seen.add(k.lower())
+        items.append((0, "%s=%s" % (k, extra.get(k) if extra and k in extra else _used(by.get(k.lower(), {}), v))))
+    for p in _visible(rep):
+        if p["key"].lower() in seen: continue
+        if _is_date_typed(p): w = "%s (default)" % _date_default(p)
+        else: w = _used(p, p.get("default"), True)
+        items.append((1 if (_is_basis(p) or _is_date(p) or _is_toggle(p) or p.get("ids_of") == "Property") else 2, "%s=%s" % (p["key"], w)))
+    items.sort(key=lambda x: x[0])
+    return _used_line([t for _, t in items], "report_info('%s')" % rep["id"])
+
+def _used_line(parts, more):
+    out = "Parameters used: "
+    for i, t in enumerate(parts):
+        if len(out) + len(t) + 2 > USED_CAP:
+            return out + "; +%d more at defaults (%s)" % (len(parts) - i, more)
+        out += ("; " if i else "") + t
+    return out if parts else out + "(none)"
+
+def state_reminder(basis=False, period=False):
+    what = (["basis"] if basis else []) + (["period"] if period else []) + ["property scope"]
+    return "In your answer, tell the user the %s these results use." % (", ".join(what[:-1]) + " and " + what[-1] if len(what) > 1 else what[0])
+
+def report_reminder(rep):
+    ps = _visible(rep)
+    return state_reminder(any(_is_basis(p) for p in ps), any(_is_date(p) for p in ps))
+
+def with_params(rep, fn):
+    """Runs fn(); on a failure of a report whose parameter list was not shown recently, adds that list to the message."""
+    try:
+        return fn()
+    except ToolError as e:
+        if params_due(rep) and e.args: e.args = ("%s\n%s" % (e.args[0], param_block(rep)),) + tuple(e.args[1:])
+        raise
+
 def t_report_info(id):
     rep = report_by(id)
-    lines = ["Report %s %s. Parameters (key: type = default [allowed]); omit a key to use its default:" % (rep["id"], rep["name"])]
-    for p in rep.get("params") or []:
-        if p.get("hidden"): continue
-        extra = []
-        if p.get("values"): extra.append("values " + "/".join(str(v) for v in p["values"][:12]))
-        if p.get("enum"): extra.append("enum_values('%s')%s" % (p["enum"], " minus " + str(p["exclude"]) if p.get("exclude") else ""))
-        if p.get("ids_of"): extra.append("IDs of %s%s" % (p["ids_of"], ", list like (1,2)" if p.get("multi") else ""))
-        lines.append("- %s: %s = %s  %s %s" % (p["key"], p.get("type"), p.get("default"), p.get("label", ""), "[" + "; ".join(extra) + "]" if extra else ""))
-    pk = _prop_param(rep)
-    if pk: lines.append("Property scope key: %s (run_report also accepts property='name or ID')." % pk)
-    lines.append("Dates: YYYY-MM-DD. Example: run_report(id=%s, parameters='Key,Value;Key2,Value2', property='...')" % rep["id"])
-    return "\n".join(lines)
+    return "Report %s %s.\n%s\nDates: YYYY-MM-DD. Example: run_report(id='%s', parameters='Key,Value;Key2,Value2'%s)" % (
+        rep["id"], rep["name"], param_block(rep, cap=12000), rep["id"], ", property='...'" if _prop_param(rep) else "")
 
 def _enum_key_for(known, word):
     """(Key, value) when `word` is the name of an allowed value of one of the report's enum parameters, such as 'Accrual'
@@ -1943,9 +2121,17 @@ def grids(d):
 
 def t_run_report(id, parameters="", property="", all_properties=False, grid="", columns="", rename=None, group_by="",
                  sum="", sort="", top=0, where="", show=0, save_as="", _label=None, _opts=None, _pre=None):
+    if _opts is None:   # a direct run_report call: the agent chose this report
+        rep = report_by(id)
+        return with_params(rep, lambda: _run_report(rep, parameters, property, grid, columns, rename, group_by, sum, sort, top, where,
+                                                    show, save_as, _label, None, _pre, direct=True))
+    return _run_report(report_by(id), parameters, property, grid, columns, rename, group_by, sum, sort, top, where, show, save_as,
+                       _label, _opts, _pre)
+
+def _run_report(rep, parameters, property, grid, columns, rename, group_by, sum, sort, top, where, show, save_as, _label, _opts, _pre,
+                direct=False):
     t0 = time.time()
     opts = _opts if _opts is not None else {}
-    rep = report_by(id)
     params = build_report_params(rep, parameters)
     pk = _prop_param(rep)
     scope = None
@@ -1958,9 +2144,17 @@ def t_run_report(id, parameters="", property="", all_properties=False, grid="", 
             scope = scope_from_filters("PropertyID,in,(%s)" % ",".join(ids))
         else:
             scope = all_scope_label()
+    first = direct and params_due(rep)
     d, q = _pre if _pre is not None else run_report_raw(rep, params)
+    # a direct call starts with every effective parameter (what was sent, defaults marked); the raw query line is for recipes
+    lead = [params_used(rep, params), report_reminder(rep)] if direct else []
+    # first use of this report: its whole parameter list, built only once nothing can fail (building it marks the list as
+    # shown, and a failed call must still get the list from with_params)
+    info = lambda: [param_block(rep)] if first else []
     g = grids(d)
-    if not g: return "Report %s returned no data.\nScope: %s\nParameters: %s\n(%.1fs, live)" % (rep["name"], scope or "n/a", q or "(defaults)", time.time() - t0)
+    if not g:
+        return "\n".join(lead + ["Report %s returned no data.\nScope: %s" % (rep["name"], scope or "n/a")] + ([] if direct else ["Parameters: %s" % (q or "(defaults)")])
+                         + info() + ["(%.1fs, live)" % (time.time() - t0)])
     flat_all = {k: [flatten(r) for r in v] for k, v in g.items()}
     gname = grid or max(flat_all, key=lambda k: len(flat_all[k]))
     if gname not in flat_all: raise ToolError("No grid '%s'. Grids: %s" % (gname, ", ".join(flat_all)))
@@ -1969,8 +2163,9 @@ def t_run_report(id, parameters="", property="", all_properties=False, grid="", 
     opts["rows"] = shown   # facts source (2d): post-processed rows, before the display limit
     if opts.get("no_total"): tot = None
     jp, cp = save(save_as or _label or rep["name"], d, main)
-    out = ["Report %s (id %s): %s has %d row(s)%s. Scope: %s" % (rep["name"], rep["id"], gname, len(main), "; " + "; ".join(notes) if notes else "", scope or "n/a"),
-           "Parameters: %s" % (q or "(defaults)")]
+    out = lead + ["Report %s (id %s): %s has %d row(s)%s. Scope: %s" % (rep["name"], rep["id"], gname, len(main), "; " + "; ".join(notes) if notes else "", scope or "n/a")]
+    if not direct: out.append("Parameters: %s" % (q or "(defaults)"))
+    out += info()
     others = ["%s(%d rows)" % (k, len(v)) for k, v in flat_all.items() if k != gname]
     if others: out.append("Other grids: %s (pass grid=...)" % ", ".join(others))
     small = [k for k, v in flat_all.items() if k != gname and 0 < len(v) <= 5 and not opts.get("no_small_grids")]
@@ -2040,8 +2235,12 @@ def fetch_report_pdf(rep, params):
     raise ToolError("this report may not support PDF (%s)" % why)
 
 def t_report_pdf(report, properties="", parameters="", save_as=""):
-    t0 = time.time()
     rep = report_by(report)
+    return with_params(rep, lambda: _report_pdf(rep, properties, parameters, save_as))
+
+def _report_pdf(rep, properties, parameters, save_as):
+    t0 = time.time()
+    first = params_due(rep)
     base = build_report_params(rep, parameters)
     pk = _prop_param(rep)
     if isinstance(properties, (int, float)) and not isinstance(properties, bool): properties = [str(int(properties))]   # a bare PropertyID such as 256
@@ -2074,10 +2273,15 @@ def t_report_pdf(report, properties="", parameters="", save_as=""):
     with ThreadPoolExecutor(min(4, len(jobs))) as ex:
         res = list(ex.map(one, jobs))
     head = "Report %s (id %s) as PDF: %d of %d saved." % (rep["name"], rep["id"], sum(1 for r in res if r[1]), len(res))
-    tail = "Scope: %s\nParameters: %s\n(%.1fs, live)" % (scope, ";".join("%s,%s" % (k, v) for k, v in base.items() if v not in (None, "")) or "(defaults)", time.time() - t0)
+    # every effective parameter first; with properties= each PDF gets its own property IDs (named on the Scope line)
+    sent = dict(base)
+    if items and pk: sent[pk] = "one PDF per property (see Scope)"
+    used = params_used(rep, sent)
+    tail = "Scope: %s\n(%.1fs, live)" % (scope, time.time() - t0)
     if any(r[1] for r in res): tail += "\n" + FILE_HINT
     if not any(r[1] for r in res): tail += "\nNo PDF was produced; use run_report for this report's data instead."
-    return head + "\n" + "\n".join(r[0] for r in res) + "\n" + tail
+    if first: tail += "\n" + param_block(rep)   # first use of this report: its whole parameter list
+    return used + "\n" + report_reminder(rep) + "\n" + head + "\n" + "\n".join(r[0] for r in res) + "\n" + tail
 
 # ----------------------------------------------------------------------------- recipes
 def load_recipes():
@@ -2127,7 +2331,7 @@ def unknown_recipe_msg(name, recs, args=None):
         msg = ("Unknown recipe '%s'. It is a built-in Rent Manager report: %s %s. Run it with %s (report_info('%s') lists every option). "
                "Recipes are only shortcuts; any standard report runs by name with list_reports + run_report." % (name, rep["id"], rep["name"], report_call(rep, args), rep["id"]))
         if len(reps) > 1: msg += " Related reports: %s." % ", ".join("%s %s" % (r["id"], r["name"]) for r in reps[1:])
-        return msg + " Recipes: %s" % ", ".join(recs)
+        return msg + " Recipes: %s\n%s" % (", ".join(recs), param_block(rep))   # the report in play: its whole parameter list
     more = (" Built-in reports that may fit: %s; run one with run_report(id='<id>') (report_info('<id>') lists its options)."
             % ", ".join("%s %s" % (r["id"], r["name"]) for r in reps)) if reps and not cand else ""   # a near-spelling recipe needs no report list
     if guess:
@@ -2385,7 +2589,9 @@ def audit_note_for(*names):
     return ("\n" + AUDIT_NOTE) if any(_AUDIT_NAME.search(str(n or "")) for n in names) else ""
 
 def t_run_recipe(name, params=None, all_properties=False, show=0):
-    text = run_recipe_result(name, params, all_properties, show)["text"]
+    res = run_recipe_result(name, params, all_properties, show)
+    text = res["text"]
+    if res.get("params_used"): text = lead_insert(text, res["params_used"])   # first, below CAPPED/MORE notices
     rec = next((r for r in load_recipes() if _recipe_key(r["name"]) == _recipe_key(str(name))), None) or {}
     return text + audit_note_for(rec.get("name"), rec.get("report"))
 
@@ -2426,14 +2632,17 @@ def run_recipe_result(name, params=None, all_properties=False, show=0):
     r = recs.get(name) or next((x for k, x in recs.items() if k.lower() == _recipe_key(name)), None)
     if not r: raise NotRun(unknown_recipe_msg(name, recs))
     spec = recipe_spec(r)
+    gave = {k.lower() for k, v in params.items() if v not in (None, "")}   # what the caller set (the rest are defaults)
     if has_period(spec) and params.get("period") not in (None, ""):  # one 'period' sets start+end
         ps, pe = period_range(params.pop("period"))
         params.setdefault("start", ps); params.setdefault("end", pe)
+        gave |= {"start", "end"}
     params.pop("period", None)
     lowp = {k.lower(): v for k, v in params.items()}
     amap = {a.lower(): pn for pn, ps in spec.items() for a in ps.get("aliases", [])}   # old param names -> current name (5e)
     for a, pn in amap.items():
         if a in lowp and pn.lower() not in lowp: lowp[pn.lower()] = lowp[a]
+        if a in gave: gave.add(pn.lower())
     bad = [k for k in params if k.lower() not in {s.lower() for s in spec} and k.lower() not in amap]
     if bad: raise ToolError("Unknown param(s) %s for %s. Params: %s. e.g. run_recipe(name='%s', params={%s})" % (bad, name, "; ".join(_param_line(k, v) for k, v in spec.items()), name, ", ".join("'%s': ..." % k for k in list(spec)[:2])))
     vals, scope, prop_ids, warn, basis_label = {}, None, [], "", ""
@@ -2470,7 +2679,9 @@ def run_recipe_result(name, params=None, all_properties=False, show=0):
     req = r["request"]
     vals["_scope"] = scope
     if "bundle" in req:
-        return run_bundle(r, vals, show, t0)
+        res = run_bundle(r, vals, show, t0)
+        res["params_used"] = recipe_used(r, spec, vals, lowp, gave, basis_label)
+        return res
     opts = {"no_small_grids": bool(r.get("no_small_grids")), "no_total": bool(r.get("no_total"))}
     post = {k: _fill(v, vals) if isinstance(v, str) else v for k, v in (r.get("post") or {}).items()}
     common = dict(columns=post.get("columns", ""), group_by=post.get("group_by", ""), sum=post.get("sum", ""),
@@ -2522,7 +2733,35 @@ def run_recipe_result(name, params=None, all_properties=False, show=0):
     if headline: text = "Answer: %s\n%s" % (headline, text)
     if opts.get("cap"): text = "\n".join(opts["cap"]) + "\n" + text   # CAPPED / PARTIAL lines come FIRST
     text = lift_notice(text)   # then the MORE notice (rows missing), above Answer/Recipe/the table
-    return {"text": text, "headline": headline, "facts": facts, "scope": scope, "rows": opts.get("rows")}
+    return {"text": text, "headline": headline, "facts": facts, "scope": scope, "rows": opts.get("rows"),
+            "params_used": recipe_used(r, spec, vals, lowp, gave, basis_label)}
+
+def recipe_used(r, spec, vals, lowp, gave, basis_label):
+    """'Parameters used: ...' + reminder for a recipe: every recipe param with the value used (dates as sent, basis as sent
+    to the report, defaults marked). The report's own query is on the 'Parameters:' line of the output."""
+    parts = []
+    for pname, p in spec.items():
+        typ, given = p.get("type", "str"), pname.lower() in gave
+        if pname == "report_params" and not given: continue
+        v = vals.get(pname)
+        if typ in ("property", "tenant"): v = lowp.get(pname.lower()) if given else ("all" if typ == "property" else v)
+        elif typ == "basis":
+            try: dflt = parse_basis(p.get("default"))[1]
+            except ToolError: dflt = ""
+            lab = re.sub(r"\s*\(Rent Manager default\)", "", basis_label or dflt)
+            parts.append("%s=%s" % (pname, lab + (" (default)" if not given and (basis_label or dflt) == dflt else ""))); continue
+        if isinstance(v, (list, tuple)): v = ", ".join(str(x) for x in v)
+        w = "not set" if v in (None, "") else str(v)
+        parts.append("%s=%s%s" % (pname, w if len(w) <= 60 else w[:57] + "...", "" if given else " (default)"))
+    has_basis = any(p.get("type") == "basis" for p in spec.values()) or "basis" in str(lowp.get("report_params") or "").lower()
+    return _used_line(parts, "find_recipe('%s')" % r["name"]) + "\n" + state_reminder(has_basis, any(p.get("type") == "date" for p in spec.values()))
+
+def lead_insert(text, block):
+    """Puts block at the top of a reply, below any leading CAPPED/PARTIAL/MORE notices (they stay first)."""
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines) and (lines[i].startswith(_LEAD) or _NOTICE.match(lines[i])): i += 1
+    return "\n".join(lines[:i] + [block] + lines[i:])
 
 def reconcile_recipes(rec, vals, rows):
     """Compare this recipe's rows (by UnitID) with another recipe's rows (default vacant_units, the physical definition) and say why
@@ -3449,13 +3688,29 @@ def tool_desc(name, desc):
         return head + recipe_catalog(DESC_LIMIT - len(head) - 20)
     return desc
 
+FLAT_ARG = {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}, {"type": "array", "items": {"type": ["string", "integer"]}}],
+            "description": "Recipe param given at top level (same as in params)"}
+
+def recipe_arg_names():
+    """Every param name (and old alias) of any recipe, plus period and report_params: the only top-level names run_recipe
+    accepts besides its own arguments. The server still checks each against the named recipe."""
+    out = []
+    for r in load_recipes():
+        spec = recipe_spec(r)
+        names = list(spec) + [a for p in spec.values() for a in p.get("aliases", [])] + (["period"] if has_period(r.get("params") or {}) else [])
+        out += [k for k in names if k not in out]
+    return sorted(out)
+
 def tool_list():
     out = []
     for n, d, p, r, _ in TOOLS:
         props = {k: v for k, v in p.items() if k not in HIDDEN}
         if n not in NO_LOCATION: props["location"] = LOCATION_ARG
         schema = {"type": "object", "properties": props, "required": r}
-        if n == "run_recipe": schema["additionalProperties"] = True
+        if n == "run_recipe":   # an explicit list: recipe params a client may send at top level, nothing else
+            for k in recipe_arg_names():
+                props.setdefault(k, FLAT_ARG)
+            schema["additionalProperties"] = False
         out.append({"name": n, "title": TITLES.get(n, n), "description": tool_desc(n, d), "inputSchema": schema,
                     "annotations": {"title": TITLES.get(n, n), "readOnlyHint": True, "idempotentHint": True, "openWorldHint": n not in LOCAL_ONLY}})
     return out
@@ -3476,6 +3731,13 @@ def call_tool(name, args):
         if args.get("name") not in (None, "") and _recipe_key(args["name"]) not in {_recipe_key(k) for k in recs}:
             raise NotRun(unknown_recipe_msg(args["name"], recs, args))   # before the argument check: other args may be fine for the right tool
     bad = [k for k in args if k not in props]
+    if bad and name == "run_recipe":   # top-level names left over are not params of this recipe
+        r = next((x for x in load_recipes() if _recipe_key(x["name"]) == _recipe_key(args.get("name", ""))), None)
+        if r:
+            spec = recipe_spec(r)
+            raise ToolError("Unknown argument(s) %s: not params of recipe %s. Its params: %s. Allowed arguments: name, params, show, location. "
+                            "e.g. run_recipe(name='%s', params={%s})" % (bad, r["name"], "; ".join(_param_line(k, v) for k, v in spec.items()) or "none",
+                                                                          r["name"], ", ".join("'%s': ..." % k for k in list(spec)[:2])))
     if bad: raise ToolError("Unknown argument(s) %s. Allowed: %s" % (bad, ", ".join(k for k in list(props) + ["location"] if k not in HIDDEN)))
     loc = resolve_location(loc_arg) if loc_arg not in (None, "") else None
     if loc and loc["default"]: loc = None   # the default location needs no override (and keeps local/aliases.json valid)
