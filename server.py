@@ -1804,13 +1804,17 @@ def _param_summary(rep, maxn=6):
     """One-line parameter list for list_reports: Key=default, visible keys only, property scope key first."""
     ps = [p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden")]
     ps.sort(key=lambda p: 0 if p.get("ids_of") == "Property" else 1)
-    out = ["%s=%s" % (p["key"], p.get("default") if p.get("default") not in (None, "") else "") for p in ps[:maxn]]
+    out = ["%s=%s" % (p["key"], "today" if _is_date_typed(p) and p.get("default") not in (None, "") else p.get("default") if p.get("default") not in (None, "") else "")
+           for p in ps[:maxn]]
     return ", ".join(out) + (", +%d more" % (len(ps) - maxn) if len(ps) > maxn else "")
 
 def _ready_call(rep):
-    """Copy-ready run_report line: first non-scope parameter with its default as the example Key,Value."""
-    ex = next((p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden") and not p.get("ids_of")), None)
-    par = "%s,%s" % (ex["key"], ex.get("default") if ex.get("default") not in (None, "") else "") if ex else ""
+    """Copy-ready run_report line: the Basis parameter (it changes the numbers), else the first non-scope parameter, with its
+    default as the example Key,Value (a date as today's date: the cached default is the day the index was built)."""
+    vis = [p for p in rep.get("params") or [] if p.get("key") and not p.get("hidden") and not p.get("ids_of")]
+    ex = next((p for p in vis if _is_basis(p)), None) or (vis[0] if vis else None)
+    dv = (datetime.date.today().isoformat() if _is_date_typed(ex) and ex.get("default") not in (None, "") else ex.get("default")) if ex else None
+    par = "%s,%s" % (ex["key"], dv if dv not in (None, "") else "") if ex else ""
     return "run_report(id='%s', parameters='%s'%s)" % (rep["id"], par, ", property='...'" if _prop_param(rep) else "")
 
 def t_list_reports(search="", limit=20):
@@ -1859,7 +1863,7 @@ def _enum_pairs(p, every=False):
     """[(value, name)] of an enum parameter, without its excluded values unless every=True; [] without the enum file."""
     if not p.get("enum"): return []
     try:
-        with open(os.path.join(SI.SPEC, "enums", p["enum"] + ".json"), encoding="utf-8") as f: vals = json.load(f)
+        with open(os.path.join(SI.SPEC, "enums", p["enum"] + ".json"), encoding="utf-8-sig") as f: vals = json.load(f)
     except (OSError, ValueError, TypeError):
         return []
     ex = set() if every else {str(x) for x in p.get("exclude") or []}
@@ -1868,6 +1872,16 @@ def _enum_pairs(p, every=False):
 
 def _is_basis(p):
     return str(p.get("key", "")).lower() == "basis" or str(p.get("enum", "")).lower() == "ebasis"
+
+def _is_date_typed(p):
+    return str(p.get("type") or "").lower() == "date"
+
+def _date_default(p):
+    """A date parameter's default in words. Rent Manager fills in the day the report runs; the default cached in the
+    index is only the day the index was built, so it is never shown."""
+    d, today = str(p.get("default") or ""), datetime.date.today().isoformat()
+    if not d: return "blank"
+    return "today - today (%s)" % today if " - " in d else "today (%s)" % today
 
 def _is_date(p):
     t = str(p.get("type") or "").lower()
@@ -1902,7 +1916,7 @@ def _word(p, v):
 def _param_desc(p):
     label = str(p.get("label") or "")
     out = "- %s (%s)%s." % (p["key"], _plain_type(p), ": " + label if label and _norm(label).replace(" ", "") != p["key"].lower() else "")
-    if _is_date(p) and str(p.get("type") or "").lower() == "date": out += " Not sent unless you set it (then Rent Manager uses its own default)."
+    if _is_date_typed(p): out += " Default %s when not set." % _date_default(p)
     else: out += " Default %s." % _word(p, p.get("default"))
     allowed = ["%s = %s" % pv for pv in _enum_pairs(p)] or (["%s = %s" % pv for pv in STD_BASIS] if _is_basis(p) else [])
     if not allowed and p.get("values"): allowed = [str(v) if str(v) != "" else "blank" for v in p["values"][:12]]
@@ -1975,7 +1989,7 @@ def params_used(rep, sent, extra=None):
         items.append((0, "%s=%s" % (k, extra.get(k) if extra and k in extra else _used(by.get(k.lower(), {}), v))))
     for p in _visible(rep):
         if p["key"].lower() in seen: continue
-        if str(p.get("type") or "").lower() == "date": w = "not set (Rent Manager default)"
+        if _is_date_typed(p): w = "%s (default)" % _date_default(p)
         else: w = _used(p, p.get("default"), True)
         items.append((1 if (_is_basis(p) or _is_date(p) or _is_toggle(p) or p.get("ids_of") == "Property") else 2, "%s=%s" % (p["key"], w)))
     items.sort(key=lambda x: x[0])
