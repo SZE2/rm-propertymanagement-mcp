@@ -1833,6 +1833,9 @@ def t_list_reports(search="", limit=20):
     if calls: tail = "Ready to run (fill Key,Value from the [params]; omit a key for its default):\n" + "\n".join(calls) + "\n" + tail
     one = _single_match(search, [by_id[h] for h in ids]) if search else None
     if one: tail += "\n" + param_block(one)   # one report is clearly meant: its whole parameter list, never for a broad search
+    elif calls:   # a broad search: no parameter lists, but the basis choice is named once when a suggested report has one
+        b = next((p for h in ids[:3] for p in _visible(by_id[h]) if _is_basis(p)), None)
+        if b: tail += "\n" + param_nudges({"params": [b]})[0]
     return "Reports (id  name  [parameters = defaults])%s:\n%s\n%s" % (" for '%s'" % search if search else "", "\n".join(rows) or "(none)", tail)
 
 def _single_match(words, reps):
