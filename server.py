@@ -956,8 +956,9 @@ def scope_warning(what):
             "rerun with property='<name or ID>' (resolve('') lists properties)." % what)
 
 # ----------------------------------------------------------------------------- resources & validation
-def find_resource(path):
-    """'Tenants' | 'tenants/123' | 'Tenants/123/Transactions' | 'Tenants/OpenReceivables' -> dict."""
+def find_resource(path, need_id=True):
+    """'Tenants' | 'tenants/123' | 'Tenants/123/Transactions' | 'Tenants/OpenReceivables' -> dict.
+    need_id=False (describe only): an ID-only sub-resource resolves with '{id}' in its path instead of erroring."""
     i = idx()
     parts = [p for p in str(path).strip().strip("/").split("/") if p]
     if not parts: raise ToolError("resource is required, e.g. 'Units' or 'Tenants/123/Transactions'")
@@ -994,12 +995,15 @@ def find_resource(path):
             pmi = SI.model_info(r["model"]) if r.get("model") else None
             if pmi and sub in pmi["embeds"]:
                 # Same data is usually an embed on the parent: one list call covers many records.
+                idf = next(iter(pmi["fields"]), "") or "<ID field>"
                 msg += (". For several %s at once, embed it on the list instead: resource='%s', "
-                        "fields='<ID field>,%s.<field>' with your filters (one request, no ID loop)" % (ctrl, ctrl, sub))
-            raise ToolError(msg)
+                        "fields='%s,%s.<field>' with your filters (one request, no ID loop)" % (ctrl, ctrl, idf, sub))
+            if need_id: raise ToolError(msg)
+            out["id_hint"] = msg
         if out["id"] is not None and not sd.get("by_id"):
             raise ToolError("%s/%s does not take an ID: use %s/%s" % (ctrl, sub, ctrl, sub))
-    out["path"] = "/" + "/".join([ctrl] + ([out["id"]] if out["id"] else []) + ([out["sub"]] if out["sub"] else []))
+    oid = out["id"] or ("{id}" if out.get("id_hint") else None)
+    out["path"] = "/" + "/".join([ctrl] + ([oid] if oid else []) + ([out["sub"]] if out["sub"] else []))
     return out
 
 def split_top(s, sep=";"):
@@ -1426,7 +1430,7 @@ def t_describe_model(model, section="summary", contains="", limit=150):
     i = idx()
     r = {}
     try:
-        r = find_resource(model); mname = r["model"]; path = r["path"]
+        r = find_resource(model, need_id=False); mname = r["model"]; path = r["path"]
     except ToolError:
         mname = model[:-5] if model.endswith("Model") else model
         path = None
@@ -1483,6 +1487,7 @@ def t_describe_model(model, section="summary", contains="", limit=150):
              if k not in mi["fields"] and k not in eset and k not in fset_f and v.split(" ")[0].split(".")[0] in (set(mi["fields"]) | eset | fset_f)]
     if wrong: out.append("Common wrong names -> use: " + "; ".join("%s -> %s" % kv for kv in wrong))
     out += model_notes([mname, ctrl, r.get("sub")])
+    if r.get("id_hint"): out.append("Query note: " + r["id_hint"])
     out.append("Batch with in(): filters 'UnitID,in,(1,2,3)' (comma list in parentheses; ';' separates clauses) instead of one call per unit/tenant.")
     out.append("Next: query(resource='%s', fields='...', filters='Field,op,value')" % (path.strip("/") if path else mname))
     return "\n".join(out)
