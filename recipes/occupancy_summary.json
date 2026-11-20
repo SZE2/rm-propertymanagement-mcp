@@ -1,6 +1,6 @@
 {
  "name": "occupancy_summary",
- "description": "Units, vacant units, occupied units, % vacant and % occupied per property. Physical vacancy: same definition as vacant_units (reserved/held units count as vacant), so vacancy + occupancy = 100%. Use for occupancy rate.",
+ "description": "Units, vacant units, occupied units, % vacant and % occupied per property. Physical vacancy: same definition as vacant_units (reserved/held units count as vacant), so vacancy + occupancy = 100%. Units on a unit status that is not vacant (offline/down, nobody living there) are left out of the unit total and shown as offlineUnits. Use for occupancy rate.",
  "use": "Occupancy and % vacant per property",
  "keywords": [
   "occupancy",
@@ -32,6 +32,12 @@
    "default": false,
    "description": "also count parking/storage and other rentable items as units",
    "advanced": true
+  },
+  "include_status_held_units": {
+   "type": "bool",
+   "default": false,
+   "description": "count units on a non-vacant unit status (offline, nobody living there) as occupied units, as before",
+   "advanced": true
   }
  },
  "request": {
@@ -50,46 +56,67 @@
   "rename": {
    "Property.Name": "property"
   },
-  "mark": {
-   "key": "UnitID",
-   "col": "vacant",
-   "filters": [
-    "IsVacantAsOf,eq,{as_of}",
-    "?!include_inactive_properties|Property.IsActive,eq,true",
-    "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
-    "PropertyID,in,({property})"
-   ],
-   "also": {
+  "mark": [
+   {
+    "key": "UnitID",
+    "col": "vacant",
     "filters": [
-     "CurrentOccupancyStatus.OccupancyType,in,(CurrentProspectReservation,CurrentUnitStatus)",
+     "IsVacantAsOf,eq,{as_of}",
      "?!include_inactive_properties|Property.IsActive,eq,true",
      "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
      "PropertyID,in,({property})"
     ],
+    "also": {
+     "filters": [
+      "CurrentOccupancyStatus.OccupancyType,in,(CurrentProspectReservation,CurrentUnitStatus)",
+      "?!include_inactive_properties|Property.IsActive,eq,true",
+      "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+      "PropertyID,in,({property})"
+     ],
+     "key": "UnitID",
+     "keep": "IsVacant"
+    }
+   },
+   {
     "key": "UnitID",
-    "keep": "IsVacant"
+    "col": "offline",
+    "when": "!include_status_held_units",
+    "filters": [
+     "CurrentOccupancyStatus.OccupancyType,eq,CurrentUnitStatus",
+     "?!include_inactive_properties|Property.IsActive,eq,true",
+     "?!include_other_rentables|UnitType.IsOtherRentableItem,eq,false",
+     "PropertyID,in,({property})"
+    ],
+    "require": {
+     "CurrentOccupancyStatus.OccupancyType": "CurrentUnitStatus"
+    },
+    "drop_if": "IsVacant",
+    "unless": "vacant",
+    "note": "left out of the unit total: {n} unit(s) on a unit status that is not vacant (offline/down, nobody living there), shown as offlineUnits; include_status_held_units=true counts them as occupied"
    }
-  },
+  ],
   "group_by": "property,PropertyID",
-  "group_sum": "vacant",
+  "group_sum": "vacant,offline",
   "calc": {
-   "totalUnits": "count",
+   "totalUnits": "count-offline",
    "vacantUnits": "vacant",
-   "occupiedUnits": "count-vacant",
-   "pct_vacant": "pct:vacant/count",
-   "pct_occupied": "pct:occupiedUnits/count"
+   "occupiedUnits": "totalUnits-vacant",
+   "offlineUnits": "offline",
+   "pct_vacant": "pct:vacant/totalUnits",
+   "pct_occupied": "pct:occupiedUnits/totalUnits"
   },
-  "columns": "property,PropertyID,totalUnits,vacantUnits,occupiedUnits,pct_vacant,pct_occupied",
-  "sum": "totalUnits,vacantUnits,occupiedUnits",
+  "columns": "property,PropertyID,totalUnits,vacantUnits,occupiedUnits,pct_vacant,pct_occupied,offlineUnits",
+  "sum": "totalUnits,vacantUnits,occupiedUnits,offlineUnits",
   "sort": "-vacantUnits"
  },
- "headline": "{sum:vacantUnits} of {sum:totalUnits} units physically vacant ({pct:vacantUnits/totalUnits}); {sum:occupiedUnits} occupied ({pct:occupiedUnits/totalUnits}) across {count} property(ies) as of {as_of}.",
+ "headline": "{sum:vacantUnits} of {sum:totalUnits} units physically vacant ({pct:vacantUnits/totalUnits}); {sum:occupiedUnits} occupied ({pct:occupiedUnits/totalUnits}) across {count} property(ies) as of {as_of}; {sum:offlineUnits} more unit(s) on a non-vacant unit status (offline) not counted.",
  "facts": {
   "vacant": "sum:vacantUnits",
   "units": "sum:totalUnits",
   "pct_vacant": "pct:vacantUnits/totalUnits",
   "occupied": "sum:occupiedUnits",
-  "pct_occupied": "pct:occupiedUnits/totalUnits"
+  "pct_occupied": "pct:occupiedUnits/totalUnits",
+  "offline": "sum:offlineUnits"
  },
- "answer_hint": "Occupancy = physically vacant rule, same as vacant_units (reserved/held units count as vacant; active properties, no parking/other rentables by default), so vacancy% + occupancy% = 100% and vacant equals the vacant_units count. vacancy_report lists the same units (a few unit types such as event rooms are omitted by that report; it prints the differences)."
+ "answer_hint": "Occupancy = physically vacant rule, same as vacant_units (reserved/held units count as vacant; active properties, no parking/other rentables by default), so vacancy% + occupancy% = 100% and vacant equals the vacant_units count. Units on a non-vacant unit status (offline, nobody living there) are left out of the total, like Rent Manager's Vacancy report; mention offlineUnits when not 0. vacancy_report lists the same vacant units (a few unit types such as event rooms are omitted by that report; it prints the differences)."
 }
