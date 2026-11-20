@@ -109,7 +109,7 @@
   "sum": "totalUnits,vacantUnits,occupiedUnits,offlineUnits",
   "sort": "-vacantUnits"
  },
- "headline": "{sum:vacantUnits} of {sum:totalUnits} units physically vacant ({pct:vacantUnits/totalUnits}); {sum:occupiedUnits} occupied ({pct:occupiedUnits/totalUnits}) across {count} property(ies) as of {as_of}; {sum:offlineUnits} more unit(s) on a non-vacant unit status (offline) not counted.",
+ "headline": "{sum:vacantUnits} of {sum:totalUnits} units physically vacant ({pct:vacantUnits/totalUnits}); {sum:occupiedUnits} occupied ({pct:occupiedUnits/totalUnits}) across {count} property(ies) as of {as_of}; units left out of the total as offline (non-vacant unit status): {sum:offlineUnits}.",
  "facts": {
   "vacant": "sum:vacantUnits",
   "units": "sum:totalUnits",
