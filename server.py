@@ -141,8 +141,8 @@ def api(path, params=None, timeout=None):
         raise ToolError(str(e))
     except OSError as e:
         if "timed out" in str(e) and timeout and timeout < rm.DEFAULT_TIMEOUT:
-            raise ToolError("Too large to size quickly (>%ds): Rent Manager could not count the matching rows in time, so the filters "
-                            "sent (if any) did not narrow it enough. Add or tighten a date range, or a PropertyID filter where the resource has one." % timeout)
+            raise ToolError("Too large to size quickly (>%ds): the filters sent (if any) did not narrow it enough for Rent Manager to count "
+                            "the rows in time; add a date or PropertyID filter, or tighten the ones sent (PropertyID only where the resource has one)." % timeout)
         if "timed out" in str(e):
             raise ToolError("Rent Manager did not answer within %ds; narrow the request (property, dates) and retry." % rm.DEFAULT_TIMEOUT)
         raise ToolError("Network error talking to Rent Manager: %s" % e)
