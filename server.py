@@ -166,6 +166,13 @@ def suggest(word, options, n=5):
     sub = [o for o in opts if word.lower() in o.lower() and o.lower() not in hits][: max(0, n - len(hits))]
     return [low[h] for h in hits] + sub
 
+def _did_you_mean(word, columns):
+    """Close column names, or (when none is close) the columns there are, so the hint is never empty."""
+    cols = list(columns)
+    near = suggest(word, cols)
+    if near: return ", ".join(near)
+    return "(nothing close) columns: %s%s" % (", ".join(cols[:30]), ", ..." if len(cols) > 30 else "") if cols else "(no columns)"
+
 # ----------------------------------------------------------------------------- concepts (where is the data) + charge families
 CONCEPTS_FILE = os.path.join(HERE, "concepts.json")
 CHARGE_TYPES_FILE = os.path.join(LOCAL, "charge_types.json")
@@ -419,7 +426,7 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
             if len(parts) != 3: raise ToolError("where must be 'Column,op,value' (ops eq ne gt ge lt le ct)")
             col, op, val = parts[0].strip(), parts[1].strip().lower(), parts[2].strip()
             if rows and col not in rows[0]:
-                raise ToolError("where: unknown column '%s'. Did you mean: %s" % (col, ", ".join(suggest(col, rows[0].keys()))))
+                raise ToolError("where: unknown column '%s'. Did you mean: %s" % (col, _did_you_mean(col, rows[0].keys())))
             def ok(r):
                 a = r.get(col); na, nv = _num(a), _num(val)
                 if op == "ct": return val.lower() in str(a or "").lower()
@@ -444,7 +451,7 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
         if rows:
             for c in gcols + scols + ([dcol] if dcol else []):
                 if c not in rows[0]:
-                    raise ToolError("Unknown column '%s'. Did you mean: %s" % (c, ", ".join(suggest(c, rows[0].keys()))))
+                    raise ToolError("Unknown column '%s'. Did you mean: %s" % (c, _did_you_mean(c, rows[0].keys())))
         groups, seen, allseen, nokey = {}, {}, set(), 0
         for r in rows:
             k = tuple(r.get(g) for g in gcols)
@@ -473,19 +480,19 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
         total = None
         if count_distinct and rows:
             dcol = count_distinct.strip()
-            if dcol not in rows[0]: raise ToolError("count_distinct: unknown column '%s'. Did you mean: %s" % (dcol, ", ".join(suggest(dcol, rows[0].keys()))))
+            if dcol not in rows[0]: raise ToolError("count_distinct: unknown column '%s'. Did you mean: %s" % (dcol, _did_you_mean(dcol, rows[0].keys())))
             notes.append("%d distinct non-empty %s in %d row(s)" % (len({r.get(dcol) for r in rows} - {None, ""}), dcol, len(rows)))
         if sum_cols and rows:
             scols = [s.strip() for s in sum_cols.split(",") if s.strip()]
             for c in scols:
-                if c not in rows[0]: raise ToolError("Unknown column '%s'. Did you mean: %s" % (c, ", ".join(suggest(c, rows[0].keys()))))
+                if c not in rows[0]: raise ToolError("Unknown column '%s'. Did you mean: %s" % (c, _did_you_mean(c, rows[0].keys())))
             total = {"TOTAL": "TOTAL", "count": len(rows), **{s: round(sum(_num(r.get(s)) or 0 for r in rows), 2) for s in scols}}
     if sort:
         keys = [k.strip() for k in sort.split(",") if k.strip()]
         for k in reversed(keys):
             desc = k.startswith("-"); k = k.lstrip("-+")
             if rows and k not in rows[0]:
-                raise ToolError("Unknown sort column '%s'. Did you mean: %s" % (k, ", ".join(suggest(k, rows[0].keys()))))
+                raise ToolError("Unknown sort column '%s'. Did you mean: %s" % (k, _did_you_mean(k, rows[0].keys())))
             rows.sort(key=lambda r: (_num(r.get(k)) is None, _num(r.get(k)) if _num(r.get(k)) is not None else str(r.get(k) or "").lower()), reverse=desc)
             if desc:  # blanks last, except an empty end date (MoveOutDate, ToDate...) = still open = newest, so first
                 end = bool(_END_DATE.search(k))
@@ -497,14 +504,14 @@ def post_process(rows, columns=None, rename=None, group_by=None, sum_cols=None, 
             bal += _num(r.get(running)) or 0.0; r["RunningBalance"] = round(bal, 2)
         notes.append("RunningBalance = cumulative %s" % running)
     if newest_first and rows:   # after running balance (computed oldest -> newest): show the newest rows first
-        if newest_first not in rows[0]: raise ToolError("most_recent_first: unknown column '%s'. Did you mean: %s" % (newest_first, ", ".join(suggest(newest_first, rows[0].keys()))))
+        if newest_first not in rows[0]: raise ToolError("most_recent_first: unknown column '%s'. Did you mean: %s" % (newest_first, _did_you_mean(newest_first, rows[0].keys())))
         rows.reverse()   # true reversal of the (oldest-first) input, so same-day rows also run newest to oldest
         rows.sort(key=lambda r: str(r.get(newest_first) or ""), reverse=True)
         end = bool(_END_DATE.search(newest_first))   # empty end date = open lease = newest
         rows.sort(key=lambda r: (r.get(newest_first) not in (None, "")) if end else (r.get(newest_first) in (None, "")))
         notes.append("newest first by %s" % newest_first)
     if first_per and rows:   # keep the first (after sorting) row per key, e.g. newest lease per UnitID
-        if first_per not in rows[0]: raise ToolError("first_per: unknown column '%s'. Did you mean: %s" % (first_per, ", ".join(suggest(first_per, rows[0].keys()))))
+        if first_per not in rows[0]: raise ToolError("first_per: unknown column '%s'. Did you mean: %s" % (first_per, _did_you_mean(first_per, rows[0].keys())))
         seen, kept, nokey = set(), [], 0
         for r in rows:
             k = r.get(first_per)
@@ -1499,7 +1506,13 @@ def t_enum_values(name):
         low = {n.lower(): n for n in names}
         if name.lower() in low: p = os.path.join(SI.SPEC, "enums", low[name.lower()] + ".json")
         else: raise ToolError("Unknown enum '%s'. Close: %s" % (name, ", ".join(suggest(name, names, 8))))
-    d = json.load(open(p, encoding="utf-8"))
+    try:
+        with open(p, encoding="utf-8-sig") as f: d = json.load(f)
+    except (OSError, ValueError):
+        # Rent Manager lists this enum, but its values were not downloaded with the spec (spec_pull got none)
+        raise NotRun("Enum '%s' exists in Rent Manager, but its values are not in the local spec. Read the field's "
+                     "values from query results instead (e.g. group_by on that field); re-running spec_pull.py may add them."
+                     % os.path.basename(p)[:-5])
     return "%s:\n%s" % (os.path.basename(p)[:-5], "\n".join("%s = %s%s" % (e.get("Value"), e.get("Name"), " (%s)" % e["Description"] if e.get("Description") and e["Description"] != e.get("Name") else "") for e in d))
 
 def t_count(resource, filters=""):
@@ -1698,6 +1711,8 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
     fl, em, flt, (lsort, order), probs = validate(r["model"], fields, embeds, filters, orderby)
     if probs:
         raise ToolError("Nothing was run. Fix these and retry:\n- " + "\n- ".join(probs))
+    for oc in (lsort or "").lstrip("-"), order or "":   # orderby column must come back to sort on (descending is sorted here)
+        if fl and oc and "." not in oc and oc not in fl.split(","): fl += "," + oc
     params = {"fields": fl, "embeds": em, "filters": flt, "orderingOptions": order}
     max_records = row_limit(max_records, hard_limit)
     mrf_col = ""
@@ -2504,7 +2519,7 @@ def _plain(x):
 
 def _col(rows, col):
     if rows and col not in rows[0]:
-        raise ToolError("unknown column '%s'. Did you mean: %s" % (col, ", ".join(suggest(col, rows[0].keys()))))
+        raise ToolError("unknown column '%s'. Did you mean: %s" % (col, _did_you_mean(col, rows[0].keys())))
 
 def _colsum(rows, col):
     _col(rows, col)
