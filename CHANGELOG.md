@@ -7,6 +7,9 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+- Fixed: `query` with `group_by`, `sum`, `sort`, `where`, `columns`, `first_per` or `count_distinct` on an embedded (dotted) column, for example `group_by='HistoryCategory.Name'`, no longer ends in `Unknown column` when that column was not in `fields`. The column is now requested (or its embed added when `fields` is empty). Only paths whose first part is a field or embed of the model are added.
+- Changed: a field named `<Model>ID` on a model whose own key is `ID` (for example `TransactionID` on `Tenants/{id}/Transactions`) now says `Use: ID`.
+- Changed: the `Too large to size quickly` reply no longer just says to add a date or PropertyID filter when filters were already sent; it says the filters sent did not narrow it enough and to add or tighten a date range, or a PropertyID filter where the resource has one.
 - Fixed: `enum_values` on an enum that Rent Manager lists but whose values were not downloaded with the local spec no longer ends in `ERROR (internal): FileNotFoundError` with a local file path. It is now a `NOT RUN:` result (`isError` false) that says the values are not available and to read the field's values from query results instead.
 - Fixed: `query` with `orderby` (for example `-UpdateDate`, newest first) and a `fields` list without that field no longer ends in `Unknown sort column`. The orderby field is now requested too, so the rows can be sorted. Embedded (dotted) orderby fields are unchanged.
 - Changed: an unknown column in `query` `sort`, `where`, `group_by`, `sum`, `count_distinct`, `first_per` and `most_recent_first`, and in recipe templates, no longer ends in an empty `Did you mean:`. When no name is close, it lists the columns there are.
