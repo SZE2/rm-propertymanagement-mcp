@@ -141,7 +141,8 @@ def api(path, params=None, timeout=None):
         raise ToolError(str(e))
     except OSError as e:
         if "timed out" in str(e) and timeout and timeout < rm.DEFAULT_TIMEOUT:
-            raise ToolError("Too large to size quickly (>%ds); add a date or PropertyID filter." % timeout)
+            raise ToolError("Too large to size quickly (>%ds): the filters sent (if any) did not narrow it enough for Rent Manager to count "
+                            "the rows in time; add a date or PropertyID filter, or tighten the ones sent (PropertyID only where the resource has one)." % timeout)
         if "timed out" in str(e):
             raise ToolError("Rent Manager did not answer within %ds; narrow the request (property, dates) and retry." % rm.DEFAULT_TIMEOUT)
         raise ToolError("Network error talking to Rent Manager: %s" % e)
@@ -1082,6 +1083,25 @@ def filterable_hint(model, f, mi, flt):
     return "filter field '%s' not filterable on %s.%s Close filterable fields: %s.%s (describe_model(section=filters) lists all)" % (
         f, model, hint, ", ".join(close or sup) or "(none)", note)
 
+def _fetch_post_cols(model, fields, embeds, *specs):
+    """Nested columns used only by local steps (group_by, sum, sort, where, columns...) must come back from the API:
+    add them to fields, or add their embed when fields is empty. Only paths whose first part is a field/embed of the model."""
+    mi = SI.model_info(model) if model else None
+    if not mi: return fields, embeds
+    roots = {x.lower() for x in list(mi["fields"]) + list(mi["embeds"])}
+    fl = [f.strip() for f in (fields or "").split(",") if f.strip()]
+    em = [e.strip() for e in (embeds or "").split(",") if e.strip()]
+    covers = lambda have, path: any(path.lower() == h.lower() or path.lower().startswith(h.lower() + ".") for h in have)
+    for spec in specs:
+        for tok in re.split(r"[,;]", str(spec or "")):
+            c = (tok.strip().lstrip("-+").split() or [""])[0]
+            if not re.fullmatch(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)+", c) or c.split(".")[0].lower() not in roots: continue
+            if fl:
+                if not covers(fl, c): fl.append(c)
+            elif not covers(em, c.rsplit(".", 1)[0]):
+                em.append(c.rsplit(".", 1)[0])
+    return ",".join(fl), ",".join(em)
+
 def validate(model, fields="", embeds="", filters="", orderby=""):
     """Check names against the spec. Returns (fields, embeds, filters, local_sort, problems)."""
     mi = SI.model_info(model) if model else None
@@ -1103,7 +1123,8 @@ def validate(model, fields="", embeds="", filters="", orderby=""):
         else:
             al = {k.lower(): v for k, v in (concepts().get("field_aliases") or {}).items()}
             probs.append("field '%s' not in %s.%s Close: %s (describe_model lists fields; * marks filterable ones)%s" % (
-                f, model, " Use: %s." % al[root.lower()] if root.lower() in al else "", ", ".join(suggest(root, fset | eset)) or "(see describe_model)",
+                f, model, " Use: %s." % al[root.lower()] if root.lower() in al else
+                " Use: ID (this model's own key is ID)." if root.lower() == model.lower() + "id" and "ID" in fset else "", ", ".join(suggest(root, fset | eset)) or "(see describe_model)",
                 " Inspect describe_model(section=embeds) and the embedded model's fields to verify a nested path." if eset else ""))
         if "." in f:  # dotted field needs its (deepest) embed, e.g. CurrentUnitStatus.UnitStatusType.Name -> CurrentUnitStatus.UnitStatusType
             segs = f.split(".")
@@ -1708,6 +1729,8 @@ def _query_one(resource, filters="", fields="", embeds="", orderby="", page_size
             raise ToolError("summary='ledger' works on one tenant's ledger: query(resource='Tenants/{id}/Transactions', summary='ledger').")
         fields, embeds = "TransactionDate,TransactionType,Description,Amount,SubsidyID,UnitID", ""
         hard_limit = True
+    fields, embeds = _fetch_post_cols(r.get("model"), fields, embeds, group_by, sum, sort, columns, first_per, count_distinct,
+                                      ";".join(c.split(",")[0] for c in str(where or "").split(";")))
     fl, em, flt, (lsort, order), probs = validate(r["model"], fields, embeds, filters, orderby)
     if probs:
         raise ToolError("Nothing was run. Fix these and retry:\n- " + "\n- ".join(probs))
