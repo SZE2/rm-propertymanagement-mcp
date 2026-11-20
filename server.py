@@ -2866,6 +2866,31 @@ def _also_rows(r, qd, al, vals, have):
         out.append(f)
     return out
 
+def _mark_held(r, qd, mk, vals, flat, def_notes):
+    """post.mark entry with require: flag rows (col = 1/0) whose key is in a second fetch, keeping only fetched rows whose columns
+    equal every require value and whose drop_if embed is not truthy (e.g. units on a unit status that is NOT vacant: nobody lives
+    there, but they are not vacant either). unless = a column already set (e.g. vacant) that wins over this flag. A non-zero count
+    adds note ({n} = count); the status read is today's, so a past as_of says so."""
+    keyf, drop, req = mk.get("key", "UnitID"), mk.get("drop_if"), mk["require"]
+    flds = ",".join(x for x in [keyf] + list(req) + [drop] if x)
+    emb = ",".join(x for x in [mk.get("embeds", ""), drop] if x)
+    mflt = ";".join(c for c in (_fill(x, vals) for x in mk.get("filters", [])) if c)
+    fl, em, flt, _s, probs = validate(r["model"], flds, emb, mflt, "")
+    if probs: raise ToolError("Recipe mark query invalid (fix recipe file):\n- " + "\n- ".join(probs))
+    rows, _t, _p, _st = fetch_ordered(r["path"], {"fields": fl, "embeds": em, "filters": flt, "orderingOptions": ""}, _rec_limit(qd))
+    if isinstance(rows, dict): rows = [rows]
+    hit = set()
+    for x in rows or []:
+        f = flatten(x)
+        if all(str(f.get(k)) == str(v) for k, v in req.items()) and not (drop and f.get(drop)): hit.add(str(f.get(keyf)))
+    n = 0
+    for f in flat:
+        f[mk["col"]] = 1 if str(f.get(keyf)) in hit and not (mk.get("unless") and f.get(mk["unless"])) else 0
+        n += f[mk["col"]]
+    if n and mk.get("note"):
+        past = str(vals.get("as_of_is_today")) != "True"
+        def_notes.append(mk["note"].replace("{n}", str(n)) + (" (judged by their unit status TODAY; a past status is not knowable)" if past else ""))
+
 def _rec_limit(qd, vals=None):
     """Row limit of a recipe query: its max_records (a number or a '{param}' template), clamped to RM_MAX_ROWS_HARD."""
     mr = qd.get("max_records", MAX_ROWS_HARD)
@@ -2928,8 +2953,15 @@ def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None, ext=None
             hit = ref.get(str(f.get(lk["col"])))
             for src, dst in lk["values"].items():
                 f[dst] = (hit.get(src) if src in hit else False) if hit is not None and src.startswith("Is") else (hit.get(src) if hit is not None else None)
-    mk = post.get("mark")
-    if mk and flat:   # second fetch: flag rows whose key is in a filtered set (e.g. vacant UnitIDs), column = 1/0
+    marks = post.get("mark") or []
+    for mk in (marks if isinstance(marks, list) else [marks]):   # one mark or a list of marks, applied in order
+        if not flat: break
+        if mk.get("when") and _fill("?%s|1" % mk["when"], vals) is None:   # when: 'flag' / '!flag' (bool param); off = column 0
+            for f in flat: f[mk["col"]] = 0
+            continue
+        if mk.get("require"):
+            _mark_held(r, qd, mk, vals, flat, def_notes); continue
+        # second fetch: flag rows whose key is in a filtered set (e.g. vacant UnitIDs), column = 1/0
         mflt = ";".join(c for c in (_fill(x, vals) for x in mk.get("filters", [])) if c)
         _f, _e, mflt2, (_s, _o), mprobs = validate(r["model"], mk["key"], "", mflt, "")
         if mprobs: raise ToolError("Recipe mark query invalid (fix recipe file):\n- " + "\n- ".join(mprobs))
