@@ -2072,6 +2072,8 @@ def build_report_params(rep, parameters):
     if probs: raise NotRun("Nothing was run. Fix these and retry:\n- " + "\n- ".join(probs))
     return out
 
+_NO_JSON = re.compile(r"can\s*not be returned as json", re.I)
+
 def run_report_raw(rep, params):
     q = ";".join("%s,%s" % (k, v) for k, v in params.items() if v not in (None, ""))
     s, h, d = api("/Reports/%s/RunReport" % rep["id"], {"parameters": q} if q else None)
@@ -2079,6 +2081,13 @@ def run_report_raw(rep, params):
     if is_oom(s, d):
         raise ToolError(OOM_PREFIX + "For report %s (id %s): pass property= (PropOwnerIDs / PropertyIDs) for fewer properties, a shorter date range (StartDate/EndDate), "
                         "or run it one property at a time and combine the results. Other built-in reports for the same data: use list_reports." % (rep["name"], rep["id"]))
+    if s != 200 and _NO_JSON.search(api_error(s, d)):
+        # some reports (e.g. Workflow Project Status) exist only as a printed document; Rent Manager answers HTTP 500
+        # "... can not be returned as JSON" whatever the parameters, so no retry or narrower scope can help
+        raise NotRun("Report %s (id %s) has no data form: Rent Manager only produces it as a document, so run_report cannot read it. "
+                     "Nothing was returned. For the document use report_pdf(report='%s') with the same properties and parameters; "
+                     "for figures to answer from, query the underlying records (search_models) or pick another report (list_reports)."
+                     % (rep["name"], rep["id"], rep["id"]))
     if s != 200: raise ToolError("Report failed: " + api_error(s, d))
     if isinstance(d, str):
         try: d = json.loads(d)
@@ -2108,6 +2117,7 @@ def run_report_chunked(rep, params, pkey, chunks, grid):
     def one(ids):
         p = dict(params); p[pkey] = "(" + ",".join(str(x) for x in ids) + ")"
         try: return run_report_raw(rep, p)
+        except NotRun: raise   # the report itself cannot be read as data: a retry gives the same answer
         except Exception: return run_report_raw(rep, p)   # retry once
     with ThreadPoolExecutor(len(chunks)) as ex:
         parts = list(ex.map(one, chunks))
