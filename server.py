@@ -47,7 +47,7 @@ class ToolError(Exception):
 
 class NotRun(ToolError):
     """A caller mistake caught before the report or recipe runs (unknown recipe or report, bad report parameter key,
-    bad recipe param value; a property lookup may already have been made). The MCP reply is a normal result that starts
+    bad recipe param value, unknown resource or sub-resource, missing/extra ID; a property lookup may already have been made). The MCP reply is a normal result that starts
     with 'NOT RUN:' (isError false): some clients pause the whole server after a few error results, and a wrong name or
     argument should not cause that. Rent Manager, network, login and other real failures stay ToolError (isError true),
     and so does a recipe whose own report or parameters do not exist on this Rent Manager."""
@@ -996,7 +996,9 @@ def find_resource(path, need_id=True):
         w = rest[0].lower()
         sub = subs.get(w)
         if not sub:   # singular/plural slip ('InterestedUnit' for InterestedUnits): use the one sub-resource that fits
-            near = {subs[k] for k in (w + "s", w + "es", w[:-1] + "ies", w[:-1], w[:-2], w[:-3] + "y") if k in subs}
+            forms = [w + "s", w + "es"] + ([w[:-1] + "ies"] if w.endswith("y") else []) + ([w[:-1]] if w.endswith("s") else []) \
+                    + ([w[:-2]] if w.endswith("es") else []) + ([w[:-3] + "y"] if w.endswith("ies") else [])
+            near = {subs[k] for k in forms if k in subs}
             sub = near.pop() if len(near) == 1 else None
         if not sub:
             raise NotRun("'%s' has no sub-resource '%s'. Options: %s" % (ctrl, rest[0], ", ".join(suggest(rest[0], subs.values(), 8) or list(subs.values())[:30])))
