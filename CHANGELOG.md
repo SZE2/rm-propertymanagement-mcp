@@ -7,6 +7,9 @@ On 2026-10-19 the public git history was reset to start at 0.10.0-beta. The entr
 
 ## [Unreleased]
 
+- Fixed: `describe_model` and `query` accept a singular/plural slip in a sub-resource name, for example `Prospect/InterestedUnit` for `Prospects/InterestedUnits`, when only one sub-resource fits; before, this was an error.
+- Fixed: `describe_model contains='Unit|Stage'` (or `'Unit,Stage'`) now lists names containing any of the parts; before, it matched the whole text literally and returned 0. A `fields` search with no match now says so.
+- Changed: an unknown resource or sub-resource, an ID-only sub-resource called without an ID, or an ID given to a sub-resource that takes none, is now a `NOT RUN:` reply (not an error result): nothing was sent, and some clients pause the server after a few error results. The text and hints are unchanged. A recipe file naming a bad resource stays an error.
 - Fixed: `query` with `group_by`, `sum`, `sort`, `where`, `columns`, `first_per` or `count_distinct` on an embedded (dotted) column, for example `group_by='HistoryCategory.Name'`, no longer ends in `Unknown column` when that column was not in `fields`. The column is now requested (or its embed added when `fields` is empty). Only paths whose first part is a field or embed of the model are added.
 - Changed: a field named `<Model>ID` on a model whose own key is `ID` (for example `TransactionID` on `Tenants/{id}/Transactions`) now says `Use: ID`.
 - Changed: the `Too large to size quickly` reply no longer just says to add a date or PropertyID filter when filters were already sent; it says the filters sent did not narrow it enough, and to add a date or PropertyID filter or tighten the ones sent.
