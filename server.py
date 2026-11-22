@@ -969,7 +969,7 @@ def find_resource(path, need_id=True):
     need_id=False (describe only): an ID-only sub-resource resolves with '{id}' in its path instead of erroring."""
     i = idx()
     parts = [p for p in str(path).strip().strip("/").split("/") if p]
-    if not parts: raise ToolError("resource is required, e.g. 'Units' or 'Tenants/123/Transactions'")
+    if not parts: raise NotRun("resource is required, e.g. 'Units' or 'Tenants/123/Transactions'")
     res = {k.lower(): k for k in i["resources"]}
     ctrl = res.get(parts[0].lower())
     if not ctrl:
@@ -985,7 +985,7 @@ def find_resource(path, need_id=True):
                 if sub.get("by_id"): paths.append("%s/{id}/%s" % (parent, name))
         note = (" Matching sub-resource paths (replace {id} with a numeric ID; check the parent): %s%s" %
                 (", ".join(paths[:10]), " (more matches omitted)" if len(paths) > 10 else "")) if paths else ""
-        raise ToolError("Unknown resource '%s'. Did you mean: %s%s" % (parts[0], ", ".join(suggest(parts[0], i["resources"]) + hits), note))
+        raise NotRun("Unknown resource '%s'. Did you mean: %s%s" % (parts[0], ", ".join(suggest(parts[0], i["resources"]) + hits), note))
     r = i["resources"][ctrl]
     out = {"ctrl": ctrl, "id": None, "sub": None, "model": r.get("model"), "list": r.get("list"), "status": r.get("status")}
     rest = parts[1:]
@@ -993,9 +993,13 @@ def find_resource(path, need_id=True):
         out["id"] = rest[0]; rest = rest[1:]; out["list"] = False
     if rest:
         subs = {k.lower(): k for k in (r.get("subs") or {})}
-        sub = subs.get(rest[0].lower())
+        w = rest[0].lower()
+        sub = subs.get(w)
+        if not sub:   # singular/plural slip ('InterestedUnit' for InterestedUnits): use the one sub-resource that fits
+            near = {subs[k] for k in (w + "s", w + "es", w[:-1] + "ies", w[:-1], w[:-2], w[:-3] + "y") if k in subs}
+            sub = near.pop() if len(near) == 1 else None
         if not sub:
-            raise ToolError("'%s' has no sub-resource '%s'. Options: %s" % (ctrl, rest[0], ", ".join(suggest(rest[0], subs.values(), 8) or list(subs.values())[:30])))
+            raise NotRun("'%s' has no sub-resource '%s'. Options: %s" % (ctrl, rest[0], ", ".join(suggest(rest[0], subs.values(), 8) or list(subs.values())[:30])))
         sd = r["subs"][sub]
         out.update(sub=sub, model=sd.get("model"), list=sd.get("multi", False), sub_all=out["id"] is None)
         if out["id"] is None and not sd.get("all"):
@@ -1006,10 +1010,10 @@ def find_resource(path, need_id=True):
                 idf = next(iter(pmi["fields"]), "") or "<ID field>"
                 msg += (". For several %s at once, embed it on the list instead: resource='%s', "
                         "fields='%s,%s.<field>' with your filters (one request, no ID loop)" % (ctrl, ctrl, idf, sub))
-            if need_id: raise ToolError(msg)
+            if need_id: raise NotRun(msg)
             out["id_hint"] = msg
         if out["id"] is not None and not sd.get("by_id"):
-            raise ToolError("%s/%s does not take an ID: use %s/%s" % (ctrl, sub, ctrl, sub))
+            raise NotRun("%s/%s does not take an ID: use %s/%s" % (ctrl, sub, ctrl, sub))
     oid = out["id"] or ("{id}" if out.get("id_hint") else None)
     out["path"] = "/" + "/".join([ctrl] + ([oid] if oid else []) + ([out["sub"]] if out["sub"] else []))
     return out
@@ -1467,14 +1471,17 @@ def t_describe_model(model, section="summary", contains="", limit=150):
     mi = SI.model_info(mname)
     if not mi: raise ToolError("No spec for model '%s'." % mname)
     c = (contains or "").lower()
+    cs = [x.strip() for x in re.split(r"[|,]", c) if x.strip()] or [""]   # 'Unit|Stage' or 'Unit,Stage' = any of them
+    has = lambda name: any(x in name.lower() for x in cs)
     sec = (section or "summary").lower()
     eset = set(mi["embeds"])
     fset_f = set(mi["filters"])
     if sec == "fields":
-        items = ["%s%s:%s" % (k, "*" if k in fset_f else "", v) for k, v in mi["fields"].items() if c in k.lower()]
-        return "%s fields (%d)%s (* = filterable):\n%s" % (mname, len(items), " containing '%s'" % c if c else "", ", ".join(items[:int(limit)]))
+        items = ["%s%s:%s" % (k, "*" if k in fset_f else "", v) for k, v in mi["fields"].items() if has(k)]
+        return "%s fields (%d)%s (* = filterable):\n%s" % (mname, len(items), " containing '%s'" % c if c else "", ", ".join(items[:int(limit)])
+                                                             or "(no field name contains that text; omit contains= to list all %d)" % len(mi["fields"]))
     if sec == "filters":
-        allf = [f for f in mi["filters"] if c in f.lower() and not bad_filter(mname, f)]
+        allf = [f for f in mi["filters"] if has(f) and not bad_filter(mname, f)]
         items = allf if c else [f for f in allf if "." not in f]
         items.sort(key=lambda x: (x.count("."), x))
         hidden = len(allf) - len(items)
@@ -1482,7 +1489,7 @@ def t_describe_model(model, section="summary", contains="", limit=150):
                 ", ".join(items[:int(limit)]), "\n...more, pass contains=" if len(items) > int(limit) else "",
                 "\n(%d nested filters such as Property.Name hidden: pass contains='Property.' (a prefix or any text) to list them)" % hidden if hidden else "")
     if sec == "embeds":
-        items = [e for e in mi["embeds"] if c in e.lower()]
+        items = [e for e in mi["embeds"] if has(e)]
         items.sort(key=lambda x: (x.count("."), x))
         return "%s embeds (%d):\n%s" % (mname, len(items), ", ".join(items[:int(limit)]))
     if sec in ("subs", "subresources", "sub-resources"):
@@ -1490,7 +1497,7 @@ def t_describe_model(model, section="summary", contains="", limit=150):
         subs = (i["resources"].get(ctrl) or {}).get("subs") or {}
         lines = ["%s sub-resources (GET):" % ctrl]
         for k, v in subs.items():
-            if c and c not in k.lower(): continue
+            if not has(k): continue
             p = []
             if v.get("by_id"): p.append("%s/{id}/%s" % (ctrl, k))
             if v.get("all"): p.append("%s/%s" % (ctrl, k))
@@ -2955,7 +2962,8 @@ def _query_renamed(qd, vals, flt, post, name, scope, common, opts=None, ext=None
     """Query + rename columns (recipes use this to give friendly column names like status_flag).
     ext (a dict): collect the processed rows and cap information in it and return "" (no file, no text): used by multi-tenant recipes."""
     t0 = time.time()
-    r = find_resource(_fill(qd["resource"], vals))
+    try: r = find_resource(_fill(qd["resource"], vals))
+    except NotRun as e: raise ToolError("Recipe query invalid (fix recipe file): %s" % e)   # the recipe's own resource, not the caller's
     fl, em, flt2, (lsort, order), probs = validate(r["model"], qd.get("fields", ""), qd.get("embeds", ""), flt, qd.get("orderby", ""))
     if probs: raise ToolError("Recipe query invalid (fix recipe file):\n- " + "\n- ".join(probs))
     prm = {"fields": fl, "embeds": em, "filters": flt2, "orderingOptions": order}
