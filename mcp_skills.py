@@ -126,14 +126,21 @@ def skills_list():
             "ttlMs": TTL_MS, "cacheScope": "private"}
 
 
+def _check_uri(uri):
+    if not isinstance(uri, str):
+        raise SkillError("uri must be a string, for example skill://<name>/SKILL.md")
+
+
 def skills_get(uri):
-    item = catalog().get(uri or "")
+    _check_uri(uri)
+    item = catalog().get(uri)
     if not item:
         raise SkillError("No skill is served at %s" % uri)
     return {"resultType": "complete", "skill": item[0], "ttlMs": TTL_MS, "cacheScope": "private"}
 
 
 def read_resource(uri):
+    _check_uri(uri)
     for _, files in catalog().values():
         if uri in files:
             with open(files[uri], "rb") as f:
@@ -147,5 +154,5 @@ def instructions_hint(limit=25):
     uris = sorted(catalog())
     if not uris:
         return ""
-    return ("\nGUIDES: before a multi-step task, read the matching guide with read_resource(uri), then follow it: "
+    return ("\nGUIDES: before a multi-step task, read the matching guide with resources/read (the read_resource tool), then follow it: "
             + "; ".join(uris[:limit]))

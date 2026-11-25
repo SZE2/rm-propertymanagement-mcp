@@ -4,7 +4,7 @@
   {
    "id": "unit_custom_fields",
    "words": ["renovation", "renovated", "remodel", "remodeled", "unit custom field", "unit custom fields", "unit user defined field"],
-   "pointer": "A unit classification may be stored in a custom field rather than a standard unit field; the field name and values vary by installation. Inspect Units embeds and sub-resources with describe_model, including Units/{id}/UserDefinedValues. Resolve the requested property and scope the unit list to it before examining values. Identify the relevant field and inspect all observed values, including unrecognized values and missing data rather than assuming a fixed category list. Before counting units, verify how values relate to unit IDs and handle duplicates or lists; grouped rows are not necessarily distinct units, so add count_distinct=UnitID to group_by to count units rather than rows. Check for caps or partial results and do not claim complete counts when data or semantics are uncertain. Guide: skill://unit-custom-fields/SKILL.md (read_resource).",
+   "pointer": "A unit classification may be stored in a custom field rather than a standard unit field; the field name and values vary by installation. Inspect Units embeds and sub-resources with describe_model, including Units/{id}/UserDefinedValues. Resolve the requested property and scope the unit list to it before examining values. Identify the relevant field and inspect all observed values, including unrecognized values and missing data rather than assuming a fixed category list. Before counting units, verify how values relate to unit IDs and handle duplicates or lists; grouped rows are not necessarily distinct units, so add count_distinct=UnitID to group_by to count units rather than rows. Check for caps or partial results and do not claim complete counts when data or semantics are uncertain. Guide: skill://unit-custom-fields/SKILL.md (resources/read or read_resource).",
    "on_models": ["Unit", "Units"],
    "resources": ["Units"],
    "recipes": []
@@ -12,7 +12,7 @@
   {
    "id": "rent",
    "words": ["rent", "last rent", "asking rent", "monthly rent", "rent amount", "lease rent", "current rent", "recurring charge", "recurring charges", "subsidy", "rental assistance", "section 8", "hap", "voucher", "tenant portion"],
-   "pointer": "Rent is not a field on Leases. Rent = the RECURRING CHARGES set up for the tenant: charge type Rent Charge (RC) plus subsidy types (Rental Assistance RA, HAP, MS8 ...), which are also rent. Show tenant portion + subsidy portion = total. Query RecurringCharges with filters 'UnitID,in,(ids)' or 'EntityKeyID,in,(tenantIds);EntityType,eq,Tenant' and summary='rent' (breakdown per tenant by charge type). Do not read rent from the ledger (Tenants/{id}/Transactions): that only holds what was posted/paid. Asking/market rent: Units embed CurrentMarketRent.Amount, or the Vacancy report. Guide for last rent of vacant units: skill://last-rent-for-vacant-units/SKILL.md (read_resource).",
+   "pointer": "Rent is not a field on Leases. Rent = the RECURRING CHARGES set up for the tenant: charge type Rent Charge (RC) plus subsidy types (Rental Assistance RA, HAP, MS8 ...), which are also rent. Show tenant portion + subsidy portion = total. Query RecurringCharges with filters 'UnitID,in,(ids)' or 'EntityKeyID,in,(tenantIds);EntityType,eq,Tenant' and summary='rent' (breakdown per tenant by charge type). Do not read rent from the ledger (Tenants/{id}/Transactions): that only holds what was posted/paid. Asking/market rent: Units embed CurrentMarketRent.Amount, or the Vacancy report. Guide for last rent of vacant units: skill://last-rent-for-vacant-units/SKILL.md (resources/read or read_resource).",
    "on_models": ["Leases", "Tenants", "Units", "RecurringCharges", "Charges"],
    "resources": ["RecurringCharges", "Leases", "Units"],
    "recipes": ["rent_roll", "vacancy_report"]
@@ -60,7 +60,7 @@
   {
    "id": "vacancy",
    "words": ["vacant", "vacancy", "days vacant", "empty unit", "unoccupied"],
-   "pointer": "Vacant = physically vacant: nobody living in the unit today; reserved or held units (prospect reservation, Rent Ready, Const ...) count as vacant and are flagged in status_flag / occupancy_flag. Recipe vacant_units (list) or vacancy_report (days vacant, market rent, same units + UnitID). Units has no IsVacant filter (IsVacant is an embed; the filter is IsVacantAsOf = strict, excludes reserved units). Guide: skill://occupancy-and-vacancy-counts/SKILL.md (read_resource).",
+   "pointer": "Vacant = physically vacant: nobody living in the unit today; reserved or held units (prospect reservation, Rent Ready, Const ...) count as vacant and are flagged in status_flag / occupancy_flag. Recipe vacant_units (list) or vacancy_report (days vacant, market rent, same units + UnitID). Units has no IsVacant filter (IsVacant is an embed; the filter is IsVacantAsOf = strict, excludes reserved units). Guide: skill://occupancy-and-vacancy-counts/SKILL.md (resources/read or read_resource).",
    "on_models": ["Units"],
    "resources": ["Units"],
    "recipes": ["vacant_units", "vacancy_report", "occupancy_summary"]

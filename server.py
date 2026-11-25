@@ -3921,11 +3921,11 @@ def handle(msg):
             result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
         elif method == "resources/list":   # skills are read by URI (see mcp_skills); nothing is enumerated here
             result = {"resources": []}
-        elif method == "resources/read":
+        elif method == "resources/read" and mcp_skills.ENABLED:   # RM_MCP_SKILLS=0: falls through to Method not found
             result = mcp_skills.read_resource(params.get("uri", ""))
-        elif method == "skills/list":
+        elif method == "skills/list" and mcp_skills.ENABLED:
             result = mcp_skills.skills_list()
-        elif method == "skills/get":
+        elif method == "skills/get" and mcp_skills.ENABLED:
             result = mcp_skills.skills_get(params.get("uri", ""))
         elif method == "prompts/list":
             result = {"prompts": []}
