@@ -23,6 +23,21 @@ To inspect missing dates, keep other supported server filters to narrow the scop
 - `find_attachments(source, ids, ...)` lists files stored in Rent Manager (lease and lease-renewal PDFs, tenant/unit/owner/vendor/service-issue history files, property files, custom-field attachments), one row per file with a `file_ref`; `download_file(file_ref, mode)` gets one (text-like files come back as text, PDFs and other files are saved to `out/files/` for you to open, or `mode='link'` returns the signed link). Files contain tenant data. Downloaded files and old results in `out/` are deleted after 14 days (`RM_OUT_KEEP_DAYS`, 0 = never).
 - `locations()` lists the locations (separate databases; IDs repeat). Every tool accepts `location='<name or id>'`.
 
+## Skills (guides served over MCP)
+The server also serves step-by-step guides for common Rent Manager workflows as Agent Skills (extension `io.modelcontextprotocol/skills`). A skill is a folder with a `SKILL.md` plus optional text files (`.md`, `.txt`, `.json`, `.csv`).
+- Clients that support the extension call `skills/list` and `skills/get`. Every client can read a file with `resources/read` on `skill://<name>/<file>`, for example `skill://report-parameters-and-basis/SKILL.md`. Clients such as Hermes expose this as a `read_resource` tool.
+- The guide URIs are listed at the end of the server instructions and appear in tool replies (concept pointers, `list_reports`). `resources/list` stays empty.
+- Generic skills ship in `skills/`. Skills for your own installation go in `local/skills/` (never published); a public skill wins a name clash.
+- Add a private skill: create `local/skills/<name>/SKILL.md` that starts with flat frontmatter, then the guide:
+  ```
+  ---
+  name: <name>
+  description: "Use when <trigger>. <one-line behaviour>."
+  ---
+  ```
+  `<name>` is lowercase letters, digits and single hyphens (at most 64) and equals the folder name; the description is 1-1024 characters. Changes show on the next request; invalid skills are skipped with a note on stderr.
+- `RM_MCP_SKILLS=0` turns skills off (no `resources` capability, no extension, no guide list in the instructions).
+
 ## Maintenance
 | Command | When |
 |---|---|
@@ -35,7 +50,7 @@ To inspect missing dates, keep other supported server filters to narrow the scop
 Debug a single tool without Claude: `PY server.py --call run_recipe '{"name":"vacant_units","params":{"property":"Oak Court"}}'`
 
 ## Files
-`server.py` MCP server and tools - `concepts.json` 'where is the data' pointers (rent, deposit, vacancy...) + `local/charge_types.json` rent/subsidy charge types (written by setup/doctor, editable) - `rm.py` GET-only API client + throttle - `spec_pull.py` / `spec_index.py` API structure + search index - `recipes/*.json` shortcuts - `setup.py`, `doctor.py` - `tests/`, `tools/` (issue drafting, public-tree builder).
+`server.py` MCP server and tools - `mcp_skills.py` + `skills/` guides served as skills - `concepts.json` 'where is the data' pointers (rent, deposit, vacancy...) + `local/charge_types.json` rent/subsidy charge types (written by setup/doctor, editable) - `rm.py` GET-only API client + throttle - `spec_pull.py` / `spec_index.py` API structure + search index - `recipes/*.json` shortcuts - `setup.py`, `doctor.py` - `tests/`, `tools/` (issue drafting, public-tree builder).
 Recipe format: `name, description, keywords, heavy, params{name: {type: date|int|number|bool|str|property|tenant, default, description}}, request: {report, parameters} | {query: {resource, filters[], fields, embeds, orderby}} | {bundle: [{recipe, params}]}, post: {where, rename, group_by, sum, sort, top, columns, running}`. Placeholders `{param}`; a filter/parameter whose placeholder is empty is dropped.
 
 ## Limits

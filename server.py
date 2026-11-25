@@ -10,7 +10,7 @@ Business data is always fetched live; only API structure (spec/) is cached.
 import os, sys, re, io, json, time, csv, math, difflib, datetime, threading, traceback, urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import rm, spec_index as SI
+import rm, spec_index as SI, mcp_skills
 from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as FuturesTimeout
 
 class ThreadPoolExecutor(_TPE):
@@ -3732,7 +3732,7 @@ TOOLS = [
            "summary": S("rent (on RecurringCharges: tenant+subsidy portions and total per tenant) | ledger (on Tenants/{id}/Transactions: last rent charge, last payment, balance)"),
            "as_of": S("With summary=rent: rent in effect on this date (default: latest per tenant)")}, **POST),
      ["resource"], t_query),
-    ("list_reports", "Rent Manager: search the built-in (standard) Rent Manager reports by name or words (balance sheet, income statement/P&L, trial balance, cash flow, general ledger, aged receivables, rent roll, vacancy...), or list them. Use this for any standard report asked for by name, then run_report(id).",
+    ("list_reports", "Rent Manager: search the built-in (standard) Rent Manager reports by name or words (balance sheet, income statement/P&L, trial balance, cash flow, general ledger, aged receivables, rent roll, vacancy...), or list them. Use this for any standard report asked for by name, then run_report(id). Guide: skill://report-parameters-and-basis/SKILL.md.",
      {"search": S("Words, e.g. 'rent roll'"), "limit": I("Max results (20)")}, [], t_list_reports),
     ("report_info", "Rent Manager: parameters (keys, defaults, allowed values) of a built-in report.",
      {"id": S("Report ID or name")}, ["id"], t_report_info),
@@ -3897,8 +3897,9 @@ def handle(msg):
         if method == "initialize":
             pv = params.get("protocolVersion") or "2025-06-18"
             result = {"protocolVersion": pv if pv in ("2024-11-05", "2025-03-26", "2025-06-18") else "2025-06-18",
-                      "capabilities": {"tools": {"listChanged": False}},
-                      "serverInfo": {"name": "rentmanager-readonly", "version": VERSION}, "instructions": INSTRUCTIONS}
+                      "capabilities": dict({"tools": {"listChanged": False}}, **mcp_skills.capabilities()),
+                      "serverInfo": {"name": "rentmanager-readonly", "version": VERSION},
+                      "instructions": INSTRUCTIONS + mcp_skills.instructions_hint()}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
@@ -3918,11 +3919,21 @@ def handle(msg):
             sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else " NOT RUN" if not_run else ""))
             call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err or not_run else "", not_run)
             result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
-        elif method in ("resources/list", "prompts/list"):
-            result = {method.split("/")[0]: []}
+        elif method == "resources/list":   # skills are read by URI (see mcp_skills); nothing is enumerated here
+            result = {"resources": []}
+        elif method == "resources/read" and mcp_skills.ENABLED:   # RM_MCP_SKILLS=0: falls through to Method not found
+            result = mcp_skills.read_resource(params.get("uri", ""))
+        elif method == "skills/list" and mcp_skills.ENABLED:
+            result = mcp_skills.skills_list()
+        elif method == "skills/get" and mcp_skills.ENABLED:
+            result = mcp_skills.skills_get(params.get("uri", ""))
+        elif method == "prompts/list":
+            result = {"prompts": []}
         else:
             send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found: %s" % method}}); return
         send({"jsonrpc": "2.0", "id": mid, "result": result})
+    except mcp_skills.SkillError as e:   # unknown skill or resource URI: Invalid params
+        send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": str(e)}})
     except Exception as e:
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
 

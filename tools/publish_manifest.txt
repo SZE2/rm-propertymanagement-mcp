@@ -25,6 +25,8 @@ server.py
 setup.py
 spec_index.py
 spec_pull.py
+mcp_skills.py
+skills/*
 tests/test_hygiene.py
 tests/test_issue_tools.py
 tests/test_mcp.py
