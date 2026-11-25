@@ -10,7 +10,7 @@ Business data is always fetched live; only API structure (spec/) is cached.
 import os, sys, re, io, json, time, csv, math, difflib, datetime, threading, traceback, urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import rm, spec_index as SI
+import rm, spec_index as SI, mcp_skills
 from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as FuturesTimeout
 
 class ThreadPoolExecutor(_TPE):
@@ -3897,8 +3897,9 @@ def handle(msg):
         if method == "initialize":
             pv = params.get("protocolVersion") or "2025-06-18"
             result = {"protocolVersion": pv if pv in ("2024-11-05", "2025-03-26", "2025-06-18") else "2025-06-18",
-                      "capabilities": {"tools": {"listChanged": False}},
-                      "serverInfo": {"name": "rentmanager-readonly", "version": VERSION}, "instructions": INSTRUCTIONS}
+                      "capabilities": dict({"tools": {"listChanged": False}}, **mcp_skills.capabilities()),
+                      "serverInfo": {"name": "rentmanager-readonly", "version": VERSION},
+                      "instructions": INSTRUCTIONS + mcp_skills.instructions_hint()}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
@@ -3918,11 +3919,21 @@ def handle(msg):
             sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else " NOT RUN" if not_run else ""))
             call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err or not_run else "", not_run)
             result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
-        elif method in ("resources/list", "prompts/list"):
-            result = {method.split("/")[0]: []}
+        elif method == "resources/list":
+            result = mcp_skills.resources_list()
+        elif method == "resources/read":
+            result = mcp_skills.read_resource(params.get("uri", ""))
+        elif method == "skills/list":
+            result = mcp_skills.skills_list()
+        elif method == "skills/get":
+            result = mcp_skills.skills_get(params.get("uri", ""))
+        elif method == "prompts/list":
+            result = {"prompts": []}
         else:
             send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found: %s" % method}}); return
         send({"jsonrpc": "2.0", "id": mid, "result": result})
+    except mcp_skills.SkillError as e:   # unknown skill or resource URI: Invalid params
+        send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": str(e)}})
     except Exception as e:
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
 
