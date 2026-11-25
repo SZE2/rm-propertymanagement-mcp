@@ -3732,7 +3732,7 @@ TOOLS = [
            "summary": S("rent (on RecurringCharges: tenant+subsidy portions and total per tenant) | ledger (on Tenants/{id}/Transactions: last rent charge, last payment, balance)"),
            "as_of": S("With summary=rent: rent in effect on this date (default: latest per tenant)")}, **POST),
      ["resource"], t_query),
-    ("list_reports", "Rent Manager: search the built-in (standard) Rent Manager reports by name or words (balance sheet, income statement/P&L, trial balance, cash flow, general ledger, aged receivables, rent roll, vacancy...), or list them. Use this for any standard report asked for by name, then run_report(id).",
+    ("list_reports", "Rent Manager: search the built-in (standard) Rent Manager reports by name or words (balance sheet, income statement/P&L, trial balance, cash flow, general ledger, aged receivables, rent roll, vacancy...), or list them. Use this for any standard report asked for by name, then run_report(id). Guide: skill://report-parameters-and-basis/SKILL.md.",
      {"search": S("Words, e.g. 'rent roll'"), "limit": I("Max results (20)")}, [], t_list_reports),
     ("report_info", "Rent Manager: parameters (keys, defaults, allowed values) of a built-in report.",
      {"id": S("Report ID or name")}, ["id"], t_report_info),
