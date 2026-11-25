@@ -38,6 +38,13 @@ The server also serves step-by-step guides for common Rent Manager workflows as 
   `<name>` is lowercase letters, digits and single hyphens (at most 64) and equals the folder name; the description is 1-1024 characters. Changes show on the next request; invalid skills are skipped with a note on stderr.
 - `RM_MCP_SKILLS=0` turns skills off (no `resources` capability, no extension, no guide list in the instructions).
 
+## MCP protocol versions
+The server speaks both kinds of MCP clients over stdio:
+- Clients that start with `initialize` (protocol 2024-11-05, 2025-03-26 or 2025-06-18) work as before. An unknown version in `initialize` gets 2025-06-18.
+- Clients on protocol 2026-07-28 skip `initialize` and put `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in every request's `_meta`. They can call `server/discover` first to get the supported versions, capabilities and instructions. Each result carries `resultType` and the server name and version in `_meta`; list, read and discover results also carry `ttlMs` (60000) and `cacheScope` (`private`).
+- A request whose `_meta` names another version gets error `-32022` (Unsupported protocol version) with the supported versions in `data.supported`. A missing or invalid `clientCapabilities` gets `-32602`. `ping` and `logging/setLevel` do not exist in 2026-07-28 and get `-32601`.
+- Only a request with a 2026-era version in `_meta` takes the new path; `initialize` and requests without that `_meta` key are answered as before.
+
 ## Maintenance
 | Command | When |
 |---|---|

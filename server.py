@@ -3889,36 +3889,107 @@ def call_log(tool, args, secs, err, chars, head="", not_run=False):
     except Exception:
         pass
 
+SERVER_INFO = {"name": "rentmanager-readonly", "version": VERSION}
+LEGACY_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")   # initialize handshake; the last is the default
+MODERN_VERSIONS = ("2026-07-28",)   # stateless: version and client capabilities in every request's _meta, no initialize
+META_VERSION, META_CAPS = "io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/clientCapabilities"
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
+
+def capabilities():
+    return dict({"tools": {"listChanged": False}}, **mcp_skills.capabilities())
+
+def tools_call(params):
+    t0 = time.time()
+    not_run = False
+    try:
+        text, err = call_tool(params.get("name"), params.get("arguments") or {}), False
+    except NotRun as e:   # a call mistake, nothing sent: normal result so clients do not pause the server for it
+        text, err, not_run = "NOT RUN: %s" % e, False, True
+    except ToolError as e:
+        text, err = "ERROR: %s" % e, True
+    except Exception as e:  # never crash the server; no secrets in tracebacks (rm never logs creds)
+        traceback.print_exc(file=sys.stderr)
+        text, err = "ERROR (internal): %s: %s" % (type(e).__name__, e), True
+    sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else " NOT RUN" if not_run else ""))
+    call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err or not_run else "", not_run)
+    return {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
+
+def modern_meta(method, params):
+    """The request's _meta when it uses the stateless protocol (2026-07-28), else None. Requests without
+    io.modelcontextprotocol/protocolVersion in _meta, with an initialize-era version there, and initialize
+    itself are served by the initialize path exactly as before."""
+    if method == "initialize" or not isinstance(params, dict):
+        return None
+    meta = params.get("_meta")
+    if not isinstance(meta, dict) or META_VERSION not in meta or meta[META_VERSION] in LEGACY_VERSIONS:
+        return None
+    return meta
+
+def handle_modern(mid, method, params, meta):
+    """One stateless 2026-07-28 request: check the version and client capabilities in _meta, then answer with
+    resultType, server identity in _meta and, for list/read/discover results, ttlMs and cacheScope.
+    ping and logging/setLevel do not exist in this version (Method not found)."""
+    def error(code, message, data=None):
+        e = {"code": code, "message": message}
+        if data is not None: e["data"] = data
+        send({"jsonrpc": "2.0", "id": mid, "error": e})
+    pv = meta.get(META_VERSION)
+    if not isinstance(pv, str) or not pv:
+        return error(-32602, "_meta %s must be a protocol version string, for example %s" % (META_VERSION, MODERN_VERSIONS[-1]))
+    if pv not in MODERN_VERSIONS:
+        return error(-32022, "Unsupported protocol version", {"supported": list(MODERN_VERSIONS), "requested": pv})
+    if not isinstance(meta.get(META_CAPS), dict):
+        return error(-32602, "_meta %s is required (an object, {} when none)" % META_CAPS)
+    # private: instructions and served skills can include this installation's local/skills
+    cache = {"ttlMs": mcp_skills.TTL_MS, "cacheScope": "private"}
+    try:
+        if method == "server/discover":
+            result = dict({"supportedVersions": list(MODERN_VERSIONS), "capabilities": capabilities(),
+                           "instructions": INSTRUCTIONS + mcp_skills.instructions_hint()}, **cache)
+        elif method == "tools/list":
+            result = dict({"tools": tool_list()}, **cache)
+        elif method == "tools/call":
+            result = tools_call(params)
+        elif method == "resources/list":
+            result = dict({"resources": []}, **cache)
+        elif method == "resources/read" and mcp_skills.ENABLED:
+            result = dict(mcp_skills.read_resource(params.get("uri", "")), **cache)
+        elif method == "skills/list" and mcp_skills.ENABLED:
+            result = mcp_skills.skills_list()
+        elif method == "skills/get" and mcp_skills.ENABLED:
+            result = mcp_skills.skills_get(params.get("uri", ""))
+        elif method == "prompts/list":
+            result = dict({"prompts": []}, **cache)
+        else:
+            return error(-32601, "Method not found: %s" % method)
+        result["resultType"] = "complete"
+        result["_meta"] = {META_SERVER_INFO: dict(SERVER_INFO)}
+        send({"jsonrpc": "2.0", "id": mid, "result": result})
+    except mcp_skills.SkillError as e:   # unknown skill or resource URI: Invalid params
+        error(-32602, str(e))
+    except Exception as e:
+        error(-32603, str(e))
+
 def handle(msg):
     mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
     if mid is None:  # notification (e.g. notifications/initialized): no reply
         return
+    meta = modern_meta(method, params)
+    if meta is not None:
+        return handle_modern(mid, method, params, meta)
     try:
         if method == "initialize":
-            pv = params.get("protocolVersion") or "2025-06-18"
-            result = {"protocolVersion": pv if pv in ("2024-11-05", "2025-03-26", "2025-06-18") else "2025-06-18",
-                      "capabilities": dict({"tools": {"listChanged": False}}, **mcp_skills.capabilities()),
-                      "serverInfo": {"name": "rentmanager-readonly", "version": VERSION},
+            pv = params.get("protocolVersion") or LEGACY_VERSIONS[-1]
+            result = {"protocolVersion": pv if pv in LEGACY_VERSIONS else LEGACY_VERSIONS[-1],
+                      "capabilities": capabilities(),
+                      "serverInfo": dict(SERVER_INFO),
                       "instructions": INSTRUCTIONS + mcp_skills.instructions_hint()}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
             result = {"tools": tool_list()}
         elif method == "tools/call":
-            t0 = time.time()
-            not_run = False
-            try:
-                text, err = call_tool(params.get("name"), params.get("arguments") or {}), False
-            except NotRun as e:   # a call mistake, nothing sent: normal result so clients do not pause the server for it
-                text, err, not_run = "NOT RUN: %s" % e, False, True
-            except ToolError as e:
-                text, err = "ERROR: %s" % e, True
-            except Exception as e:  # never crash the server; no secrets in tracebacks (rm never logs creds)
-                traceback.print_exc(file=sys.stderr)
-                text, err = "ERROR (internal): %s: %s" % (type(e).__name__, e), True
-            sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else " NOT RUN" if not_run else ""))
-            call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err or not_run else "", not_run)
-            result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
+            result = tools_call(params)
         elif method == "resources/list":   # skills are read by URI (see mcp_skills); nothing is enumerated here
             result = {"resources": []}
         elif method == "resources/read" and mcp_skills.ENABLED:   # RM_MCP_SKILLS=0: falls through to Method not found
