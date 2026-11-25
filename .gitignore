@@ -15,3 +15,5 @@ CLAUDE.local.md
 dev-notes/
 # Build output of tools/make_public_tree.py
 public-tree/
+# Hermes plans and agent state (never public)
+.hermes/
