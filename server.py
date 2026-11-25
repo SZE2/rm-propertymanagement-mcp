@@ -1072,7 +1072,7 @@ def normalize_in(filters):
     return _BT_BARE.sub(lambda m: "%s,bt,(%s,%s)" % (m.group(1), m.group(3), m.group(4)), f)
 
 def bad_filter(model, f):
-    """Known-broken filter names for a model (concepts.json bad_filters): nested owner filters on history notes."""
+    """Known-broken filter names for a model (concepts.json bad_filters, reason in bad_filter_notes): rejected before any request."""
     for b in (concepts().get("bad_filters") or {}).get(model, []):
         if f == b or f.startswith(b + "."): return True
     return False
@@ -1151,7 +1151,8 @@ def validate(model, fields="", embeds="", filters="", orderby=""):
             probs.append("filter '%s' must be Field,op,value" % clause); continue
         f, op, val = parts[0].strip(), parts[1].strip().lower(), parts[2].strip()
         if f in flt and bad_filter(model, f):
-            probs.append("filter '%s' does not work on %s (HTTP 404 or 0 rows). Use the sub-resource Tenants/{id}/HistoryNotes (or Units/Owners/Vendors/Properties/ServiceManagerIssues/{id}/HistoryNotes); on the HistoryNotes collection query() routes one owner id there itself." % (f, model))
+            probs.append("filter '%s' does not work on %s %s" % (f, model, (concepts().get("bad_filter_notes") or {}).get(model) or
+                         "(HTTP 404 or 0 rows). Use the sub-resource Tenants/{id}/HistoryNotes (or Units/Owners/Vendors/Properties/ServiceManagerIssues/{id}/HistoryNotes); on the HistoryNotes collection query() routes one owner id there itself."))
             continue
         if f not in flt:
             if f.lower() in lower_fl: f = lower_fl[f.lower()]

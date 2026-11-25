@@ -93,7 +93,11 @@
   "Units": "IsVacant is an embed, not a filter. Use IsVacantAsOf,eq,date (strict) or the recipes.",
   "HistoryNotes": "Nested owner filters (Tenant.TenantID, Unit.UnitID, Owner.OwnerID, Vendor.VendorID, Property.PropertyID, ServiceManagerIssue...) fail on the HistoryNotes collection (HTTP 404 or silently 0 rows). Use the sub-resource Tenants/{id}/HistoryNotes (also Units, Owners, Vendors, Properties, ServiceManagerIssues); query routes single-owner filters there itself. Files: find_attachments."
  },
- "bad_filters": {"HistoryNote": ["Tenant", "Unit", "Owner", "OwnerProspect", "Vendor", "Property", "Prospect", "ServiceManagerIssue"]},
+ "bad_filters": {"HistoryNote": ["Tenant", "Unit", "Owner", "OwnerProspect", "Vendor", "Property", "Prospect", "ServiceManagerIssue"],
+                 "RecurringCharge": ["PropertyID", "TenantID"]},
+ "bad_filter_notes": {
+  "RecurringCharge": "(the live API answers HTTP 500 although the spec lists it). Use Unit.PropertyID for a property, EntityKeyID with EntityType,eq,Tenant for tenants, or UnitID."
+ },
  "report_suggestions": [
   {
    "id": "ledger",
