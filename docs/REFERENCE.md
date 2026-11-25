@@ -40,10 +40,10 @@ The server also serves step-by-step guides for common Rent Manager workflows as 
 
 ## MCP protocol versions
 The server speaks both kinds of MCP clients over stdio:
-- Clients that start with `initialize` (protocol 2024-11-05, 2025-03-26 or 2025-06-18) work as before. An unknown version in `initialize` gets 2025-06-18.
+- Clients that start with `initialize` (protocol 2024-11-05, 2025-03-26 or 2025-06-18) work as before. An unknown version in `initialize` gets 2025-06-18, including `2026-07-28`: that version does not use `initialize`, so a client that sends it there is answered as a 2025-06-18 client.
 - Clients on protocol 2026-07-28 skip `initialize` and put `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in every request's `_meta`. They can call `server/discover` first to get the supported versions, capabilities and instructions. Each result carries `resultType` and the server name and version in `_meta`; list, read and discover results also carry `ttlMs` (60000) and `cacheScope` (`private`).
-- A request whose `_meta` names another version gets error `-32022` (Unsupported protocol version) with the supported versions in `data.supported`. A missing or invalid `clientCapabilities` gets `-32602`. `ping` and `logging/setLevel` do not exist in 2026-07-28 and get `-32601`.
-- Only a request with a 2026-era version in `_meta` takes the new path; `initialize` and requests without that `_meta` key are answered as before.
+- A request whose `_meta` names another version gets error `-32022` (Unsupported protocol version) with `data.supported` listing only `2026-07-28`, the one version served without `initialize`. Older versions are reached through `initialize`. A missing or invalid `clientCapabilities` gets `-32602`. `ping` and `logging/setLevel` do not exist in 2026-07-28 and get `-32601`.
+- A request takes the new path when its `_meta` has `io.modelcontextprotocol/protocolVersion` set to anything other than 2024-11-05, 2025-03-26 or 2025-06-18. `initialize`, requests without that `_meta` key, and requests naming one of those three versions are answered as before.
 
 ## Maintenance
 | Command | When |

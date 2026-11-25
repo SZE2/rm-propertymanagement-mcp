@@ -3921,6 +3921,7 @@ def modern_meta(method, params):
     if method == "initialize" or not isinstance(params, dict):
         return None
     meta = params.get("_meta")
+    # any other value, even a malformed one, is a modern request: handle_modern answers -32022 or -32602
     if not isinstance(meta, dict) or META_VERSION not in meta or meta[META_VERSION] in LEGACY_VERSIONS:
         return None
     return meta
