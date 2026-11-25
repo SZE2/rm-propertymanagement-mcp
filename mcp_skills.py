@@ -4,6 +4,8 @@ Read-only, standard library only. A skill is a folder holding SKILL.md (flat YAM
 description) plus optional text files. Public, generic skills live in skills/. Skills that belong to one
 installation live in local/skills/, which is never published. Clients that know the extension call
 skills/list and skills/get; every client can read the files with resources/read (skill://<name>/<file>).
+The skill URIs are named in the server instructions. resources/list does not enumerate them: the extension
+lets a server serve skills without listing them, and older clients keep the empty list they had before.
 Set RM_MCP_SKILLS=0 to turn the whole feature off.
 """
 import hashlib
@@ -18,6 +20,7 @@ ROOTS = (os.path.join(HERE, "skills"), os.path.join(HERE, "local", "skills"))
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TEXT_TYPES = {".md": "text/markdown", ".txt": "text/plain", ".json": "application/json", ".csv": "text/csv"}
 MAX_FILES, MAX_BYTES = 512, 16 * 1024 * 1024
+TTL_MS = 60000   # cache hint for skills/list and skills/get; "private" because local/skills may be installation-specific
 
 
 class SkillError(Exception):
@@ -119,19 +122,15 @@ def capabilities():
 
 
 def skills_list():
-    return {"resultType": "complete", "skills": [entry for entry, _ in catalog().values()]}
+    return {"resultType": "complete", "skills": [entry for entry, _ in catalog().values()],
+            "ttlMs": TTL_MS, "cacheScope": "private"}
 
 
 def skills_get(uri):
     item = catalog().get(uri or "")
     if not item:
         raise SkillError("No skill is served at %s" % uri)
-    return {"resultType": "complete", "skill": item[0]}
-
-
-def resources_list():
-    return {"resources": [{"uri": uri, "name": e["frontmatter"]["name"], "mimeType": "text/markdown",
-                           "description": e["frontmatter"]["description"]} for uri, (e, _) in catalog().items()]}
+    return {"resultType": "complete", "skill": item[0], "ttlMs": TTL_MS, "cacheScope": "private"}
 
 
 def read_resource(uri):

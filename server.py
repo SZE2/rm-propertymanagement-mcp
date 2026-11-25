@@ -3919,8 +3919,8 @@ def handle(msg):
             sys.stderr.write("[rm-mcp] %s %.2fs%s\n" % (params.get("name"), time.time() - t0, " ERR" if err else " NOT RUN" if not_run else ""))
             call_log(params.get("name"), params.get("arguments") or {}, time.time() - t0, err, len(text), text if err or not_run else "", not_run)
             result = {"content": [{"type": "text", "text": str(text)}] + list(getattr(text, "extra", ()) or ()), "isError": err}
-        elif method == "resources/list":
-            result = mcp_skills.resources_list()
+        elif method == "resources/list":   # skills are read by URI (see mcp_skills); nothing is enumerated here
+            result = {"resources": []}
         elif method == "resources/read":
             result = mcp_skills.read_resource(params.get("uri", ""))
         elif method == "skills/list":
